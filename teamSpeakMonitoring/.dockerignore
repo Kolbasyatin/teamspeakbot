@@ -1,0 +1,10 @@
+node_modules
+dist
+.env.local
+.env.test.local
+.env.test
+npm-debug.log
+Dockerfile
+README.md
+src/**/*.test.ts
+src/test

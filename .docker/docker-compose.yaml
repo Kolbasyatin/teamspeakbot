@@ -1,0 +1,10 @@
+services:
+  node:
+    build:
+      context: ..
+      dockerfile: .docker/Dockerfile
+    working_dir: /workspace
+    volumes:
+      - ../teamSpeakMonitoring:/workspace
+    stdin_open: true
+    tty: true

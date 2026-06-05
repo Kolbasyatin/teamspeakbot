@@ -1,0 +1,43 @@
+### GET request to example server
+GET https://examples.http-client.intellij.net/get
+    ?generated-in=GoLand
+
+###
+GET http://{{host}}/api/v1/botId
+
+### Получаю бота
+POST http://{{host}}/api/v1/bot/login
+Content-Type: application/json
+
+{
+  "username": "{{sinus_bot_data.username}}",
+  "password": "{{sinus_bot_data.password}}",
+  "botId": "{{sinus_bot_data.botId}}"
+}
+
+### Получаю instance
+GET http://{{host}}/api/v1/bot/instances
+Content-Type: application/json
+Authorization: bearer {{bot_bearer}}
+
+### Вызывать синк серверов в мониторе
+POST http://{{botHost}}/internal/reload-servers
+
+### Вызывать принудительный синк серверов в мониторе (если в БД меняются существующие, а не добавляются, удаляются)
+POST http://{{botHost}}/internal/force-reload-servers
+
+###
+GET https://api.telegram.org/{{arma_bot_token}}/getUpdates
+
+### Bohemia server list get
+GET https://www.armahq.com/api/servers/full
+
+###
+GET https://www.armahq.com/api/servers?id="4fc5ae8e-de88-483d-babc-7c3e7837b577"
+
+
+###
+GET https://rubezh-arma.ru/api-server-info.php?server=3
+
+###
+GET http://192.168.3.57:11434/api/tags

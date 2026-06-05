@@ -1,0 +1,114 @@
+import type {ServerMonitorConfig} from "./config.js";
+import type {ServerInfo as ServerInfoResponse} from "@callowayisweird/source-query";
+import {EventEmitter} from "node:events";
+import {log} from "../logger.js";
+
+export type ServerStatus = 'online' | 'offline' | 'unknown'
+
+export interface ServerSnapshot {
+    config: ServerMonitorConfig;
+    status: ServerStatus;
+    failedChecks: number;
+    info: ServerInfoResponse | undefined;
+    lastInfo: ServerInfoResponse | undefined;
+    statusSince: Date;
+}
+
+interface ServerStatusEvent {
+    snapshot: ServerSnapshot;
+    previousStatus: ServerStatus;
+    currentStatus: ServerStatus;
+}
+
+export class ServerProbe extends EventEmitter {
+    private status: ServerStatus = 'unknown';
+    private failedChecks: number = 0;
+    private lastInfo: ServerInfoResponse | undefined;
+
+    constructor(
+        private readonly serverData: ServerMonitorConfig,
+        private maxFailedChecks: number = 5,
+        private statusSince: Date = new Date()
+    ) {
+        super();
+    }
+
+    public handleResult(result: ServerInfoResponse | undefined): void {
+        const previousStatus = this.status;
+        const previousInfo = this.lastInfo;
+        //Статус сервера определяется только лишь тем, пришел ли ответ. Если да, то он точно online
+        if (result) {
+            this.statusSuccess(result);
+        } else {
+            this.statusFailure();
+        }
+
+        this.commitChanges(previousStatus, previousInfo);
+    }
+
+    public getSnapshot(): ServerSnapshot {
+        return {
+            config: this.serverData,
+            status: this.status,
+            failedChecks: this.failedChecks,
+            info: this.status === 'online' ? this.lastInfo : undefined,
+            lastInfo: this.lastInfo,
+            statusSince: this.statusSince,
+        };
+    }
+
+    private statusSuccess(result: ServerInfoResponse): void {
+        this.status = 'online';
+        this.failedChecks = 0;
+        this.lastInfo = result;
+    }
+
+    private statusFailure() {
+        this.failedChecks += 1;
+
+        if (this.failedChecks >= this.maxFailedChecks) {
+            this.status = 'offline';
+        }
+    }
+
+    private commitChanges(previousServerStatus: ServerStatus, previousInfo: ServerInfoResponse | undefined): void {
+
+        if (this.lastInfo?.players !== previousInfo?.players) {
+            this.emit('playersChanged', this.getSnapshot());
+        }
+
+        //Status changed!
+        //FIXME: Тут грязновато немного. Я добавляю просто свойство времени действия текущего статуса statusSince,
+        // хотя правильнее нужно вводить что то типа объекта ProbeState.
+        if (this.isStatusChanged(this.status, previousServerStatus)) {
+            this.statusSince = new Date();
+            this.emitStatusEvents(previousServerStatus);
+        }
+    }
+
+    private isStatusChanged(currentStatus: ServerStatus, previousStatus: ServerStatus): boolean {
+        return currentStatus !== previousStatus;
+    }
+
+    private emitStatusEvents(previousServerStatus: ServerStatus): void {
+        //Тут пока несрастуха. Зачем собирать сообщение чтоб потом из него забирать одно поле... еще не знаю сам.
+        const event: ServerStatusEvent = {
+            snapshot: this.getSnapshot(),
+            previousStatus: previousServerStatus,
+            currentStatus: this.status,
+        };
+
+        this.emit('serverStatusChanged', event.snapshot)
+
+        if (this.status === 'online') {
+            log.debug(`${this.serverData.name} is online`)
+            this.emit('online', event.snapshot);
+        }
+
+        if (this.status === 'offline') {
+            log.debug(`${this.serverData.name} is offline`)
+            this.emit('offline', event.snapshot);
+        }
+    }
+
+}

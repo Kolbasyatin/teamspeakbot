@@ -1,0 +1,9 @@
+.idea/
+.env.local
+.env.test.local
+.env.dev.local
+/arma-server
+
+teamSpeakMonitoring/dist
+teamSpeakMonitoring/node_modules
+/http-client.private.env.json
