@@ -72,6 +72,33 @@ export interface TGProperties {
     channelId: string;
 }
 
+export interface MonitorProperties {
+    pollIntervalMs: number;
+    suspiciousPollIntervalMs: number;
+    maxFailedChecks: number;
+}
+
+const monitorConfig = convict<MonitorProperties>({
+    pollIntervalMs: {
+        doc: "Default server poll interval in milliseconds",
+        format: "nat",
+        default: 5_000,
+        env: "MONITOR_POLL_INTERVAL_MS",
+    },
+    suspiciousPollIntervalMs: {
+        doc: "Poll interval in milliseconds after failed probe",
+        format: "nat",
+        default: 1_000,
+        env: "MONITOR_SUSPICIOUS_POLL_INTERVAL_MS",
+    },
+    maxFailedChecks: {
+        doc: "Failed checks before server is marked offline",
+        format: "nat",
+        default: 5,
+        env: "MONITOR_MAX_FAILED_CHECKS",
+    },
+});
+
 const syncServerConfig = convict<SyncServerPort>({
     port: {
         doc: "Sync Server port",
@@ -171,9 +198,11 @@ databaseConfig.validate({allowed: "strict"});
 syncServerConfig.validate({allowed: "strict"});
 channelsNotifierName.validate({allowed: "strict"});
 tgConfig.validate({allowed: "strict"});
+monitorConfig.validate({allowed: "strict"});
 
 export const properties: TeamSpeakProperties = config.getProperties();
 export const dbConfig = databaseConfig.getProperties()
 export const syncConfig = syncServerConfig.getProperties()
 export const tsNotifierChannelNames = channelsNotifierName.getProperties();
 export const tgProperties = tgConfig.getProperties();
+export const monitorProperties = monitorConfig.getProperties();

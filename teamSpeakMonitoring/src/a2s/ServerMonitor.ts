@@ -5,6 +5,9 @@ import {type ServerInfo} from "@callowayisweird/source-query";
 import {log} from "../logger.js";
 import {A2sQuerier} from "../queriers/A2sQuerier.js";
 import {RestQuerier} from "../queriers/RestQuerier.js";
+import {type ScheduledTask, Scheduler} from "./ProbeScheduler.js";
+import {type MonitorProperties} from "../properties.js";
+import type {Logger} from "pino";
 
 
 export type ServerDescriptionView = {
@@ -22,26 +25,31 @@ export interface Querier {
 export class ServerMonitor extends EventEmitter {
 
     private lastViewKey?: string;
-    private interval: NodeJS.Timeout | undefined;
     private readonly probes = new Map<number, ServerProbe>();
     private readonly queriers = new Map<ServerQueryConfig["type"], Querier>([
         ["a2s", new A2sQuerier()],
         ["rest", new RestQuerier()]
     ])
+    private readonly scheduler = new Scheduler<ScheduledTask>();
 
-    public constructor() {
+    public constructor(
+        private options: MonitorProperties,
+        private logger: Logger
+    ) {
         super();
     }
-
-    //TODO: перевести на цикл с setTimeout . Потенциально tick может задержаться и следующий будет
-    //наваливаться на предыдущий.
-    public async start(): Promise<void> {
-        void await this.tick();
-        this.interval = setInterval(() => {
-            void this.tick();
-        }, 5_000);
+    
+    public start(): void {
+        this.scheduler.sync(this.getScheduledTasks());
+        this.scheduler.start();
     }
 
+    private async pollProbe(probe: ServerProbe): Promise<void> {
+        this.logger.debug(`Poll сервера ${probe.getServerName()} с периодом ${this.getNextPollDelayMs(probe)} мс.`);
+        const config: ServerMonitorConfig = probe.getSnapshot().config;
+        const result: ServerInfo | undefined = await this.getQuerier(config.query.type).query(config.query);
+        probe.handleResult(result);
+    }
 
     public forceSync(servers: ServerMonitorConfig[]) {
         for (const probe of this.probes.values()) {
@@ -51,20 +59,19 @@ export class ServerMonitor extends EventEmitter {
         this.probes.clear();
 
         for (const server of servers) {
-            //TODO: внести в настройки maxFailedCheck
-            const probe = new ServerProbe(server, 2);
+            
+            const probe = this.createServerProbe(server);
 
             probe.on("online", this.handleProbeOnline)
             probe.on("offline", this.handleProbeOffline)
 
             this.probes.set(server.id, probe);
         }
+        //Синк с шедулером
+        this.scheduler.sync(this.getScheduledTasks());
 
     }
 
-
-    //TODO: при большом таймауте между tick может возникнуть ситуация когда после добавление серверов пройдет много времени
-    //посмотреть на предмет requestTick, который запустит poll вне очереди.
     public syncServers(servers: ServerMonitorConfig[]): void {
         const nextServerIds = new Set(servers.map(server => server.id));
         //Тут удаляем или пропускаем существующие
@@ -85,20 +92,19 @@ export class ServerMonitor extends EventEmitter {
                 continue;
             }
 
-            const probe = new ServerProbe(server, 2);
+            const probe = this.createServerProbe(server);
 
             probe.on("online", this.handleProbeOnline)
             probe.on("offline", this.handleProbeOffline)
 
             this.probes.set(server.id, probe);
         }
+        //Синк с шедулером
+        this.scheduler.sync(this.getScheduledTasks());
     }
 
     public stop(): void {
-        if (this.interval) {
-            clearInterval(this.interval);
-            this.interval = undefined;
-        }
+        this.scheduler.stop();
     }
 
     public getSnapshot(): ServerSnapshot[] {
@@ -113,21 +119,13 @@ export class ServerMonitor extends EventEmitter {
         this.emit("serverOffline", event);
     };
 
-    private async tick(): Promise<void> {
-        await this.pollAll();
-        this.emitChangedIfNeeded();
-
-    }
-
     private emitChangedIfNeeded(): void {
         const view = this.toDescriptionView(this.getSnapshot());
         const viewKey = JSON.stringify(view);
-        log.debug(viewKey);
-
+        this.logger.debug(viewKey);
         if (viewKey === this.lastViewKey) {
             return;
         }
-
         this.lastViewKey = viewKey;
         this.emit("viewChanged", view);
     }
@@ -142,18 +140,6 @@ export class ServerMonitor extends EventEmitter {
         }));
     }
 
-    private async pollAll(): Promise<void> {
-        await Promise.all(
-            [...this.probes.values()].map(probe => this.pollProbe(probe))
-        )
-    }
-
-    private async pollProbe(probe: ServerProbe): Promise<void> {
-        const config: ServerMonitorConfig = probe.getSnapshot().config;
-        const result: ServerInfo | undefined = await this.getQuerier(config.query.type).query(config.query);
-        probe.handleResult(result);
-    }
-
     private getQuerier(type: ServerQueryConfig["type"]): Querier {
         const querier = this.queriers.get(type);
 
@@ -164,5 +150,33 @@ export class ServerMonitor extends EventEmitter {
         return querier;
     }
 
+    //Взависимости от статусов, здесь  говорим что если failedChecks случился, то учащаем проверки до секунды
+    // (улучшаем проблему ложного срабатывания)
+    private getNextPollDelayMs(probe: ServerProbe): number {
+        const snapshot = probe.getSnapshot();
+        if (snapshot.status !== "offline" && snapshot.failedChecks > 0) {
+            return this.options.suspiciousPollIntervalMs;
+        }
+
+        return this.options.pollIntervalMs;
+    }
+
+    private getScheduledTasks(): ScheduledTask[] {
+        return [...this.probes.values()].map(probe => ({
+            id: probe.getSnapshot().config.id,
+            run: async (): Promise<void> => {
+                await this.pollProbe(probe);
+                this.emitChangedIfNeeded();
+            },
+            getNextDelayMs: (): number => {
+                return this.getNextPollDelayMs(probe);
+            }
+        }))
+    }
+
+    private createServerProbe(server: ServerMonitorConfig): ServerProbe {
+        return new ServerProbe(server, this.options.maxFailedChecks, this.logger);
+    }
+    
 }
 

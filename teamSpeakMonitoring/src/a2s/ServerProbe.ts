@@ -1,7 +1,7 @@
 import type {ServerMonitorConfig} from "./config.js";
 import type {ServerInfo as ServerInfoResponse} from "@callowayisweird/source-query";
 import {EventEmitter} from "node:events";
-import {log} from "../logger.js";
+import type {Logger} from "pino";
 
 export type ServerStatus = 'online' | 'offline' | 'unknown'
 
@@ -28,7 +28,8 @@ export class ServerProbe extends EventEmitter {
     constructor(
         private readonly serverData: ServerMonitorConfig,
         private maxFailedChecks: number = 5,
-        private statusSince: Date = new Date()
+        private logger: Logger,
+        private statusSince: Date = new Date(),
     ) {
         super();
     }
@@ -101,14 +102,18 @@ export class ServerProbe extends EventEmitter {
         this.emit('serverStatusChanged', event.snapshot)
 
         if (this.status === 'online') {
-            log.debug(`${this.serverData.name} is online`)
+            this.logger.debug(`${this.serverData.name} is online`)
             this.emit('online', event.snapshot);
         }
 
         if (this.status === 'offline') {
-            log.debug(`${this.serverData.name} is offline`)
+            this.logger.debug(`${this.serverData.name} is offline`)
             this.emit('offline', event.snapshot);
         }
+    }
+    
+    public getServerName(): string {
+        return this.serverData.name;
     }
 
 }

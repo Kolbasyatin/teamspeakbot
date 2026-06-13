@@ -1,9 +1,10 @@
 import pino from "pino";
 
 const isDev = process.env.NODE_ENV !== "production";
+const defaultLevel = isDev ? "debug" : "info";
 
 export const log = pino({
-    level: process.env.LOG_LEVEL ?? "info",
+    level: process.env.LOG_LEVEL ?? defaultLevel,
     base: null,
     timestamp: false,
     ...(isDev ? {

@@ -4,12 +4,12 @@ import {log} from "./logger.js";
 import {AdminServer} from "./server/AdminServer.js";
 import {ServerRepository} from "./repositories/ServerRepository.js";
 import {createPool} from "mariadb";
-import {dbConfig, syncConfig, tgProperties} from "./properties.js";
+import {dbConfig, syncConfig, tgProperties, monitorProperties} from "./properties.js";
 import {Notifier} from "./Notifiers/Notifiers.js";
 import {TelegramBot} from "./tg/TelegramBot.js";
 
 async function main(): Promise<any> {
-    const monitor: ServerMonitor = new ServerMonitor();
+    const monitor: ServerMonitor = new ServerMonitor(monitorProperties, log);
     const notifier = new Notifier();
     const pool = createPool(dbConfig);
     const serverRepository = new ServerRepository(pool);
