@@ -1,8 +1,8 @@
 import {log} from "../logger.js";
 import type {ServerDescriptionView} from "../a2s/ServerMonitor.js";
 import type {ServerSnapshot} from "../a2s/ServerProbe.js";
-import {TSNotifier} from "./TSNotifier.js";
-import {properties, tgProperties, tsNotifierChannelNames} from "../properties.js";
+import {type ChannelDescriptionEditor, TSNotifier} from "./TSNotifier.js";
+import {tgProperties, tsNotifierChannelNames} from "../properties.js";
 import {notifierConfig} from "../notifierConfig.js";
 import {LogNotifier} from "./LogNotifier.js";
 import {Bot} from "grammy";
@@ -29,8 +29,8 @@ export interface NotificationHandler {
 export class Notifier {
     private readonly handlersByEvent: Map<NotificationEventType, NotificationHandler[]>;
 
-    constructor() {
-        const tsNotifier = new TSNotifier(properties, notifierConfig.teamspeak, tsNotifierChannelNames.channels);
+    constructor(channelEditor: ChannelDescriptionEditor) {
+        const tsNotifier = new TSNotifier(channelEditor, notifierConfig.teamspeak, tsNotifierChannelNames.channels);
         const logNotifier = new LogNotifier(notifierConfig.log);
         const telegramBot = new Bot(tgProperties.token);
         const telegramSender = new TelegramSender(telegramBot, tgProperties.channelId)

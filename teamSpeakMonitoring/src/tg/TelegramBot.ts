@@ -1,8 +1,18 @@
 import {Bot} from "grammy";
-import type {ServerMonitor} from "../a2s/ServerMonitor.js";
 import type {ServerSnapshot} from "../a2s/ServerProbe.js";
 import {formatDuration, intervalToDuration,} from "date-fns";
 import {ru} from "date-fns/locale";
+import {log} from "../logger.js";
+
+//Боту нужно только читать состояние серверов, весь ServerMonitor ему знать незачем.
+export interface StatusSource {
+    getSnapshot(): ServerSnapshot[];
+}
+
+//Аналогично по TeamSpeak: боту нужен только список никнеймов, соединение не его забота.
+export interface OnlineNicknamesSource {
+    listOnlineNicknames(): Promise<string[]>;
+}
 
 export class TelegramBot {
     private readonly bot: Bot;
@@ -10,7 +20,8 @@ export class TelegramBot {
     constructor(
         token: string,
         // private readonly channelId: string,
-        private readonly monitor: ServerMonitor
+        private readonly statusSource: StatusSource,
+        private readonly nicknamesSource: OnlineNicknamesSource
     ) {
         this.bot = new Bot(token);
         this.registerCommands();
@@ -26,11 +37,32 @@ export class TelegramBot {
 
     private registerCommands(): void {
         this.bot.command("time", async ctx => {
-            await ctx.reply(this.showTime(this.monitor.getSnapshot()));
+            await ctx.reply(this.showTime(this.statusSource.getSnapshot()));
+        })
+        this.bot.command("who", async ctx => {
+            await ctx.reply(await this.showWho());
         })
         this.bot.command("id", async ctx => {
             await ctx.reply(`chatId: ${ctx.chatId}`);
         });
+    }
+
+    private async showWho(): Promise<string> {
+        try {
+            const nicknames = await this.nicknamesSource.listOnlineNicknames();
+
+            if (nicknames.length === 0) {
+                return "В TeamSpeak никого нет";
+            }
+
+            return [
+                `В TeamSpeak (${nicknames.length}):`,
+                ...nicknames.map(nickname => `• ${nickname}`),
+            ].join("\n");
+        } catch (error) {
+            log.error({error}, "Не удалось получить список клиентов TeamSpeak");
+            return "Не удалось получить список из TeamSpeak";
+        }
     }
 
     private showTime(snapshots: ServerSnapshot[]): string {

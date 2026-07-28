@@ -40,7 +40,7 @@ export class AdminServer extends EventEmitter {
             res.writeHead(204);
             res.end();
 
-            //Тут какая-то залупа с асинхронность, хз как это работает.
+            //Тут какая-то залупа с асинхронностью, хз как это работает.
             setImmediate(() => {
                 this.emit(eventName);
             });
@@ -83,6 +83,7 @@ export class AdminServer extends EventEmitter {
         if (method !== "POST") {
             return undefined;
         }
+
         return this.routes.get(pathname);
     }
 }
