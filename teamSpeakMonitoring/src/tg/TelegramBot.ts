@@ -1,4 +1,4 @@
-import {Bot} from "grammy";
+import type {Bot} from "grammy";
 import type {ServerSnapshot} from "../a2s/ServerProbe.js";
 import {formatDuration, intervalToDuration,} from "date-fns";
 import {ru} from "date-fns/locale";
@@ -15,15 +15,13 @@ export interface OnlineNicknamesSource {
 }
 
 export class TelegramBot {
-    private readonly bot: Bot;
-
+    //Bot создаётся в composition root и делится с отправкой уведомлений: один long-polling
+    //и один api-клиент на процесс.
     constructor(
-        token: string,
-        // private readonly channelId: string,
+        private readonly bot: Bot,
         private readonly statusSource: StatusSource,
         private readonly nicknamesSource: OnlineNicknamesSource
     ) {
-        this.bot = new Bot(token);
         this.registerCommands();
     }
 

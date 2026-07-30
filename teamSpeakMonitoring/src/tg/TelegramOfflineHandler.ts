@@ -1,11 +1,8 @@
-import type {NotificationEvent, NotificationHandler} from "../Notifiers/Notifiers.js";
+import type {NotificationEvent, NotificationHandler} from "../Notifiers/NotificationDispatcher.js";
 import type {TelegramSender} from "./TelegramSender.js";
 
 export class TelegramOfflineHandler implements NotificationHandler {
-    constructor(
-        private readonly sender: TelegramSender,
-        private readonly activeFlag: boolean,
-    ) {
+    constructor(private readonly sender: TelegramSender) {
     }
 
     public async notify(event: NotificationEvent): Promise<void> {
@@ -13,13 +10,5 @@ export class TelegramOfflineHandler implements NotificationHandler {
             return;
         }
         await this.sender.send(`${event.snapshot.config.name} is offline`);
-    }
-
-    public async close(): Promise<void> {
-        return;
-    }
-
-    isActive(): boolean {
-        return this.activeFlag;
     }
 }

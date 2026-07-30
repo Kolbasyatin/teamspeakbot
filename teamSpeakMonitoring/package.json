@@ -10,7 +10,7 @@
     "start": "node dist/main.js",
     "dev": "tsx watch src/main.ts",
     "test": "NODE_ENV=test tsx --import dotenv-flow/config --test src/*/*.test.ts",
-    "test:unit": "NODE_ENV=test tsx --test src/a2s/*.test.ts",
+    "test:unit": "NODE_ENV=test tsx --test src/a2s/*.test.ts src/Notifiers/*.test.ts",
     "test:repo": "NODE_ENV=test tsx --import dotenv-flow/config  --test src/repositories/*.test.ts"
   },
   "keywords": [

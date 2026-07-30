@@ -4,11 +4,25 @@ import {log} from "./logger.js";
 import {AdminServer} from "./server/AdminServer.js";
 import {ServerRepository} from "./repositories/ServerRepository.js";
 import {createPool} from "mariadb";
-import {dbConfig, properties, syncConfig, tgProperties, monitorProperties} from "./properties.js";
-import {Notifier} from "./Notifiers/Notifiers.js";
+import {
+    dbConfig,
+    properties,
+    syncConfig,
+    tgProperties,
+    monitorProperties,
+    tsNotifierChannelNames,
+} from "./properties.js";
+import {notifierConfig} from "./notifierConfig.js";
+import {NotificationDispatcher, type NotificationSubscription} from "./Notifiers/NotificationDispatcher.js";
+import {TSNotifier} from "./Notifiers/TSNotifier.js";
+import {LogNotifier} from "./Notifiers/LogNotifier.js";
 import {TelegramBot} from "./tg/TelegramBot.js";
+import {TelegramSender} from "./tg/TelegramSender.js";
+import {TelegramOnlineHandler} from "./tg/TelegramOnlineHandler.js";
+import {TelegramOfflineHandler} from "./tg/TelegramOfflineHandler.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
+import {Bot} from "grammy";
 import {retry} from "./retry.js";
 
 //БД может подняться позже нас (в compose она стартует рядом), поэтому первое чтение серверов
@@ -24,30 +38,82 @@ async function main(): Promise<any> {
     //Одно query-подключение к TeamSpeak на процесс: его делят нотифаер и команды бота.
     const teamSpeakConnection = new TeamSpeakConnection(properties, log);
     const teamSpeakClient = new TeamSpeakClient(teamSpeakConnection);
-    const notifier = new Notifier(teamSpeakClient);
     const pool = createPool(dbConfig);
     const serverRepository = new ServerRepository(pool);
     const adminWebServer = new AdminServer({
         port: syncConfig.port
     })
-    const telegramBot = new TelegramBot(tgProperties.token, monitor, teamSpeakClient);
+
+    //Telegram доступен только при непустом токене: grammy бросает "Empty token!" в конструкторе.
+    //Один Bot на процесс — его делят команды бота и отправка уведомлений.
+    const telegramApi = tgProperties.token ? new Bot(tgProperties.token) : undefined;
+    //Команды (/time, /who, /id) не зависят от TELEGRAM_NOTIFIER: тот флаг управляет только
+    //уведомлениями о статусах серверов.
+    const telegramBot = telegramApi
+        ? new TelegramBot(telegramApi, monitor, teamSpeakClient)
+        : undefined;
+
+    if (!telegramApi) {
+        log.info("TELEGRAM_TOKEN пуст — Telegram отключён целиком: ни команд, ни уведомлений");
+    }
+
+    //Единственное место, где решается, что куда отправляется. Выключенный канал не создаётся
+    //вовсе, поэтому хендлерам не нужен ни флаг активности, ни знание о конфигурации.
+    const subscriptions: NotificationSubscription[] = [];
+
+    if (notifierConfig.log) {
+        subscriptions.push({
+            event: "statusViewChanged",
+            name: "log",
+            handler: new LogNotifier(log),
+        });
+    }
+
+    if (notifierConfig.teamspeak) {
+        subscriptions.push({
+            event: "statusViewChanged",
+            name: "teamspeak",
+            handler: new TSNotifier(teamSpeakClient, tsNotifierChannelNames.channels),
+        });
+    }
+
+    if (notifierConfig.telegram && telegramApi) {
+        const telegramSender = new TelegramSender(telegramApi, tgProperties.channelId);
+
+        subscriptions.push({
+            event: "serverOnline",
+            name: "telegram:online",
+            handler: new TelegramOnlineHandler(telegramSender),
+        });
+        subscriptions.push({
+            event: "serverOffline",
+            name: "telegram:offline",
+            handler: new TelegramOfflineHandler(telegramSender),
+        });
+    }
+
+    if (notifierConfig.telegram && !telegramApi) {
+        log.warn("TELEGRAM_NOTIFIER включен, но TELEGRAM_TOKEN пуст — уведомления в Telegram отключены");
+    }
+
+    const dispatcher = new NotificationDispatcher(subscriptions, log);
 
     monitor.on("viewChanged", view => {
-        void notifier.notify({
+        void dispatcher.notify({
             type: "statusViewChanged",
             view,
         });
     });
 
     monitor.on("serverOnline", snapshot => {
-        void notifier.notify({
+        void dispatcher.notify({
             type: "serverOnline",
             snapshot,
         });
     });
 
     monitor.on("serverOffline", snapshot => {
-        void notifier.notify({
+        void dispatcher.notify({
             type: "serverOffline",
             snapshot,
         });
@@ -80,8 +146,9 @@ async function main(): Promise<any> {
     const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
         console.log(signal)
         monitor.stop();
-        void await notifier.close();
-        void await telegramBot.stop();
+        if (telegramBot) {
+            await telegramBot.stop();
+        }
         void await teamSpeakConnection.close();
         void await adminWebServer.stop();
         void await pool.end();
@@ -112,7 +179,7 @@ async function main(): Promise<any> {
     });
     void await adminWebServer.start();
     void monitor.start();
-    void telegramBot.start();
+    telegramBot?.start();
 }
 
 try {
