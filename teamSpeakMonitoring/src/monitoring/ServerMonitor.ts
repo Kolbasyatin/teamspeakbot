@@ -1,10 +1,10 @@
 import {ServerProbe, type ServerSnapshot, type ServerStatus} from "./ServerProbe.js";
 import {EventEmitter} from "node:events";
-import type {ServerMonitorConfig, ServerQueryConfig, ServerQueryResult} from "./config.js";
-import {log} from "../logger.js";
+import type {ServerMonitorConfig} from "./MonitoredServer.js";
+import type {Querier, ServerQueryConfig, ServerQueryResult} from "./ServerQuery.js";
 import {A2sQuerier} from "../queriers/A2sQuerier.js";
 import {RestQuerier} from "../queriers/RestQuerier.js";
-import {type ScheduledTask, Scheduler} from "./ProbeScheduler.js";
+import {type ScheduledTask, Scheduler} from "./Scheduler.js";
 import {type MonitorProperties} from "../properties.js";
 import type {Logger} from "pino";
 
@@ -16,10 +16,6 @@ export type ServerDescriptionView = {
     players?: number | undefined;
     maxPlayers?: number | undefined;
 };
-
-export interface Querier {
-    query(config: ServerQueryConfig): Promise<ServerQueryResult | undefined>;
-}
 
 export class ServerMonitor extends EventEmitter {
 

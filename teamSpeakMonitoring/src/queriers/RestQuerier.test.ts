@@ -1,7 +1,7 @@
 import test, {mock} from "node:test";
 import assert from "node:assert/strict";
 import {RestQuerier} from "./RestQuerier.js";
-import type {RestQueryConfig} from "../a2s/config.js";
+import type {RestQueryConfig} from "../monitoring/ServerQuery.js";
 
 const restConfig: RestQueryConfig = {
     type: "rest",

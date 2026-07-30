@@ -1,4 +1,4 @@
-import type {NotificationEvent, NotificationHandler} from "./NotificationDispatcher.js";
+import type {NotificationEvent, NotificationHandler} from "./events.js";
 import type {Logger} from "pino";
 
 export class LogNotifier implements NotificationHandler {

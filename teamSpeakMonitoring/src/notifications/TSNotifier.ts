@@ -1,5 +1,5 @@
-import type {NotificationEvent, NotificationHandler} from "./NotificationDispatcher.js";
-import {TeamSpeakRender} from "../a2s/TeamSpeakRender.js";
+import type {NotificationEvent, NotificationHandler} from "./events.js";
+import {TeamSpeakRender} from "../teamspeak/TeamSpeakRender.js";
 
 //Нотифаеру нужна одна операция, про соединение и библиотеку TeamSpeak он не знает.
 export interface ChannelDescriptionEditor {

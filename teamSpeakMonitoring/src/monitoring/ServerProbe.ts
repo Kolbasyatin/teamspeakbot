@@ -1,4 +1,5 @@
-import type {ServerMonitorConfig, ServerQueryResult} from "./config.js";
+import type {ServerMonitorConfig} from "./MonitoredServer.js";
+import type {ServerQueryResult} from "./ServerQuery.js";
 import {EventEmitter} from "node:events";
 import type {Logger} from "pino";
 

@@ -1,4 +1,4 @@
-import type {ServerDescriptionView} from "./ServerMonitor.js";
+import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
 
 export class TeamSpeakRender {
     public static render(view: ServerDescriptionView[]): string {

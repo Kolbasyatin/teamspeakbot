@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {TSNotifier, type ChannelDescriptionEditor} from "./TSNotifier.js";
-import type {NotificationEvent} from "./NotificationDispatcher.js";
+import type {NotificationEvent} from "./events.js";
 
 const viewChanged: NotificationEvent = {
     type: "statusViewChanged",

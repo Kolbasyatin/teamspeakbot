@@ -75,6 +75,13 @@
 `queriers/A2sQuerier.ts`, `queriers/RestQuerier.ts`, `a2s/ServerProbe.test.ts`, `package.json`;
 добавлен `queriers/RestQuerier.test.ts`. Подробности — в описании итерации 3 ниже.
 
+### 2026-07-30 — Итерация 4: слои и честные имена
+
+Чистое перемещение без изменения логики: домен в `monitoring/` и `notifications/`, адаптеры
+в `queriers/`, `teamspeak/`, `telegram/`, `persistence/`, `admin/`. Папки `a2s/`, `Notifiers/`, `tg/`,
+`repositories/`, `server/` удалены. Контракты вынесены из файлов потребителей. Тестов по-прежнему 39,
+изменены только пути импортов. Подробности — в описании итерации 4 ниже.
+
 ---
 
 ## Итерации
@@ -417,15 +424,75 @@
 типы, интерфейс `Querier`) — в свою папку, названную по задаче. Адаптеры опроса — в `queriers/`.
 `TeamSpeakRender` — к TeamSpeak-нотифаеру. Мёртвый массив `servers` удалить.
 
-**Результат.** По дереву каталогов видно, что делает приложение, а не какие в нём библиотеки. Ни один
-доменный файл не импортирует ничего из папок адаптеров. Тесты из итераций 1–2 зелёные без правок,
-кроме путей импорта.
+**Что сделали.** Перемещения через `git mv`, поэтому история файлов сохранилась.
+
+| было | стало |
+|---|---|
+| `a2s/ServerMonitor.ts` | `monitoring/ServerMonitor.ts` |
+| `a2s/ServerProbe.ts` | `monitoring/ServerProbe.ts` |
+| `a2s/ProbeScheduler.ts` | `monitoring/Scheduler.ts` (класс и так звался `Scheduler`) |
+| `a2s/config.ts` | разделён на `monitoring/ServerQuery.ts` и `monitoring/MonitoredServer.ts` |
+| `a2s/TeamSpeakRender.ts` | `teamspeak/TeamSpeakRender.ts` |
+| `Notifiers/*` | `notifications/*` |
+| `tg/TelegramBot.ts`, `tg/TelegramSender.ts` | `telegram/*` |
+| `tg/Telegram*Handler.ts` | `notifications/*` |
+| `repositories/*` | `persistence/*` |
+| `server/AdminServer.ts` | `admin/AdminServer.ts` |
+
+Контракты вынесены из файлов своих потребителей:
+- `Querier` из `ServerMonitor.ts` → `monitoring/ServerQuery.ts`, рядом с `ServerQueryConfig`
+  и `ServerQueryResult`. Теперь `queriers/*` зависят от контракта, а не от модуля монитора.
+- `NotificationEvent`, `NotificationEventType`, `NotificationHandler`, `NotificationSubscription`
+  из `NotificationDispatcher.ts` → `notifications/events.ts`. Хендлеры больше не импортируют файл,
+  названный по диспетчеру.
+
+Мёртвый массив `servers` (четыре реальных сервера, оставленных «для примера») удалён. Вместо него
+в `MonitoredServer.ts` — описание строки `monitored_servers`: какие поля, что кладётся
+в `query_config`, чем `port` в query отличается от игрового порта в `game_address`, и какой admin
+endpoint дёрнуть после правки. То есть шпаргалка, ради которой массив и держался, осталась,
+а мёртвый код ушёл.
+
+Названия классов **не менялись** — по договорённости отдельным шагом. `TSNotifier`, `LogNotifier`,
+`TeamSpeakRender`, `Telegram*Handler` пока как есть. Слово `handlers` в структуру не введено:
+все шесть файлов лежат в `notifications/` плоско, потому что термин признан неясным и закреплять
+его в раскладке до обсуждения не стоит.
+
+**Результат — проверено.**
+- `npx tsc -p tsconfig.json --noEmit` — чисто.
+- Тестов 39, все зелёные. **В самих тестах не изменилось ничего, кроме путей импорта** — это
+  и есть доказательство, что перемещение не поменяло поведение.
+- Приложение стартует: те же два сообщения про отключённый Telegram и переход к чтению БД.
+- Старых путей в проекте не осталось: `grep` по `a2s/`, `Notifiers/`, `/tg/`, `repositories/`,
+  `src/server/` в коде, `package.json` и workflow'ах ничего не находит. Скрипты `test:unit`
+  и `test:repo` обновлены (второй указывал на удалённую `src/repositories/`).
+
+**Критерий, который я заявил, не выполнился — и это честный результат итерации, а не недоделка.**
+Я обещал, что `monitoring/` и `notifications/` не будут импортировать адаптеры. Проверка нашла
+5 нарушений, и у них две разные причины:
+1. `ServerMonitor` импортирует `A2sQuerier` и `RestQuerier`, потому что **сам их создаёт**
+   в инициализаторе поля. Это настоящее нарушение и настоящий дефект — тот же, что был в `Notifier`
+   до итерации 2. Записан в долг (`AGENTS.md`, п. 20), лечится передачей queriers из `main.ts`.
+2. Хендлеры (`TSNotifier` → `TeamSpeakRender`, `Telegram*Handler` → `TelegramSender`) зависят
+   от транспортов **по своей природе**: хендлер и есть мост между событием и транспортом. Значит
+   правило я сформулировал слишком сильно для выбранной раскладки: `notifications/` содержит
+   и ядро (`events`, `NotificationDispatcher`), и адаптеры к транспортам. Записано в долг (п. 21);
+   решать в итерации 5, когда у хендлеров появится явная политика и станет видно, что в них домен,
+   а что транспорт.
+
+Уточнённое правило, которое **выполняется**: ядро домена — `ServerMonitor`, `ServerProbe`,
+`Scheduler`, `ServerQuery`, `MonitoredServer`, `NotificationDispatcher`, `events` — не импортирует
+адаптеры. Единственное исключение — п. 20.
+
+**Побочно найдено.** SIGTERM во время стартового retry БД валит shutdown:
+`Error [ERR_SERVER_NOT_RUNNING]: Server is not running.` — `adminWebServer.stop()` вызывается,
+хотя `start()` ещё не выполнялся. Дефект не новый и к перемещению отношения не имеет; это часть
+темы «при неудачном/частичном старте ресурсы закрываются неправильно», итерация 7.
 
 **Почему здесь.** Осознанно **после** итерации 3, а не до: пока доменные типы не выделены, настоящие
 границы слоёв не видны, и перекладывание файлов вслепую — это перестановка мебели. Сначала понимаем
 границы, потом закрепляем их структурой.
 
-**Статус:** запланировано.
+**Статус:** ✅ сделано 2026-07-30. Не закоммичено. Переименования классов — отдельным шагом.
 
 ---
 

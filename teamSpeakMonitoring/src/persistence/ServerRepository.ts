@@ -1,4 +1,5 @@
-import type {ServerMonitorConfig, ServerQueryConfig} from "../a2s/config.js";
+import type {ServerMonitorConfig} from "../monitoring/MonitoredServer.js";
+import type {ServerQueryConfig} from "../monitoring/ServerQuery.js";
 import {type Pool} from "mariadb";
 
 

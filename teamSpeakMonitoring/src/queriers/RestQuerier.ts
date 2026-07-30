@@ -1,5 +1,9 @@
-import type {Querier} from "../a2s/ServerMonitor.js";
-import type {RestQueryConfig, ServerQueryConfig, ServerQueryResult} from "../a2s/config.js";
+import type {
+    Querier,
+    RestQueryConfig,
+    ServerQueryConfig,
+    ServerQueryResult,
+} from "../monitoring/ServerQuery.js";
 import {log} from "../logger.js";
 
 export class RestQuerier implements Querier {

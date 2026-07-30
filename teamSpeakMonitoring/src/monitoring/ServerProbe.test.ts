@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type {Logger} from "pino";
 import {ServerProbe, type ServerSnapshot} from "./ServerProbe.js";
-import type {ServerMonitorConfig, ServerQueryResult} from "./config.js";
+import type {ServerMonitorConfig} from "./MonitoredServer.js";
+import type {ServerQueryResult} from "./ServerQuery.js";
 
 //Характеризационные тесты: фиксируют поведение как есть, до рефакторинга.
 //Порог намеренно меньше боевого (5), чтобы тесты читались.

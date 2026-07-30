@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Logger} from "pino";
-import {Scheduler, type ScheduledTask, type ScheduledTaskId} from "./ProbeScheduler.js";
+import {Scheduler, type ScheduledTask, type ScheduledTaskId} from "./Scheduler.js";
 
 //Тесты на настоящих таймерах. Утверждения строятся на КОЛИЧЕСТВЕ запусков, а не на замерах
 //времени: "если бы sync сбрасывал таймеры, задача не запустилась бы ни разу" — бинарный факт,

@@ -1,5 +1,5 @@
 import type {Pool} from "mariadb";
-import type {ServerQueryConfig} from "../a2s/config.js";
+import type {ServerQueryConfig} from "../monitoring/ServerQuery.js";
 
 export async function migrateTestDatabase(pool: Pool): Promise<void> {
     await pool.query(`

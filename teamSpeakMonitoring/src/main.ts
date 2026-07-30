@@ -1,8 +1,8 @@
 import "dotenv-flow/config";
-import {ServerMonitor} from "./a2s/ServerMonitor.js";
+import {ServerMonitor} from "./monitoring/ServerMonitor.js";
 import {log} from "./logger.js";
-import {AdminServer} from "./server/AdminServer.js";
-import {ServerRepository} from "./repositories/ServerRepository.js";
+import {AdminServer} from "./admin/AdminServer.js";
+import {ServerRepository} from "./persistence/ServerRepository.js";
 import {createPool} from "mariadb";
 import {
     dbConfig,
@@ -13,13 +13,14 @@ import {
     tsNotifierChannelNames,
 } from "./properties.js";
 import {notifierConfig} from "./notifierConfig.js";
-import {NotificationDispatcher, type NotificationSubscription} from "./Notifiers/NotificationDispatcher.js";
-import {TSNotifier} from "./Notifiers/TSNotifier.js";
-import {LogNotifier} from "./Notifiers/LogNotifier.js";
-import {TelegramBot} from "./tg/TelegramBot.js";
-import {TelegramSender} from "./tg/TelegramSender.js";
-import {TelegramOnlineHandler} from "./tg/TelegramOnlineHandler.js";
-import {TelegramOfflineHandler} from "./tg/TelegramOfflineHandler.js";
+import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js";
+import type {NotificationSubscription} from "./notifications/events.js";
+import {TSNotifier} from "./notifications/TSNotifier.js";
+import {LogNotifier} from "./notifications/LogNotifier.js";
+import {TelegramBot} from "./telegram/TelegramBot.js";
+import {TelegramSender} from "./telegram/TelegramSender.js";
+import {TelegramOnlineHandler} from "./notifications/TelegramOnlineHandler.js";
+import {TelegramOfflineHandler} from "./notifications/TelegramOfflineHandler.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
 import {Bot} from "grammy";

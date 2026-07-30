@@ -1,5 +1,5 @@
 import type {Bot} from "grammy";
-import type {ServerSnapshot} from "../a2s/ServerProbe.js";
+import type {ServerSnapshot} from "../monitoring/ServerProbe.js";
 import {formatDuration, intervalToDuration,} from "date-fns";
 import {ru} from "date-fns/locale";
 import {log} from "../logger.js";

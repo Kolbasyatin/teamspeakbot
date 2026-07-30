@@ -41,36 +41,47 @@ teamSpeakMonitoring/         сам сервис
     properties.ts            convict-конфиги: TeamSpeak, DB, admin-порт, TG, monitor, TS-каналы
     notifierConfig.ts        convict-флаги включения нотифаеров
     logger.ts                pino (pino-pretty вне production)
-    a2s/
-      config.ts              ServerMonitorConfig, ServerQueryConfig (a2s | rest),
-                             ServerQueryResult (что querier отдаёт домену) + мёртвый пример
-      ServerMonitor.ts       владеет probes, шедулит опрос, эмитит viewChanged/serverOnline/Offline
-      ServerProbe.ts         состояние одного сервера, эмитит online/offline/playersChanged
-      ProbeScheduler.ts      generic Scheduler<TTask>: per-task setTimeout, sync без сброса таймеров
-      TeamSpeakRender.ts     ServerDescriptionView[] → BBCode-строка
-    queriers/
-      A2sQuerier.ts          @callowayisweird/source-query
-      RestQuerier.ts         fetch + AbortController по timeout
-    repositories/
-      ServerRepository.ts    findAllEnabled(): читает monitored_servers, парсит query_config JSON
-      ServerRepository.test.ts  интеграционный тест по живой MariaDB
-    teamspeak/
+    retry.ts                 повтор с экспоненциальным backoff
+    Saiga.ts                 клиент к OpenAI-совместимому API (Ollama). Пока не подключён — см. §9
+
+    monitoring/            ← домен: что значит «следить за сервером»
+      ServerMonitor.ts       владеет probes, шедулит опрос, эмитит viewChanged/serverOnline/Offline;
+                             здесь же ServerDescriptionView
+      ServerProbe.ts         состояние одного сервера; ServerSnapshot, ServerStatus
+      Scheduler.ts           generic Scheduler<TTask>: per-task setTimeout, sync без сброса таймеров
+      MonitoredServer.ts     ServerMonitorConfig + шпаргалка по строке в monitored_servers
+      ServerQuery.ts         контракт опроса: ServerQueryConfig (a2s | rest), ServerQueryResult,
+                             интерфейс Querier
+    notifications/         ← домен уведомлений + реализации каналов доставки
+      events.ts              контракт: NotificationEvent, NotificationEventType,
+                             NotificationHandler, NotificationSubscription
+      NotificationDispatcher.ts  раздаёт событие подписанным на его тип
+      TSNotifier.ts          описание канала TeamSpeak; здесь же ChannelDescriptionEditor
+      LogNotifier.ts         пишет событие в лог
+      TelegramOnlineHandler.ts / TelegramOfflineHandler.ts
+
+    queriers/              ← адаптеры опроса
+      A2sQuerier.ts          @callowayisweird/source-query (единственный, кто знает эту библиотеку)
+      RestQuerier.ts         fetch + AbortController, проверка формы ответа
+    teamspeak/             ← адаптер TeamSpeak
       TeamSpeakConnection.ts жизненный цикл одного query-соединения (SSH), lazy connect, close
       TeamSpeakClient.ts     единственное место, знающее про ts3-nodejs-library API
-    tg/
+      TeamSpeakRender.ts     ServerDescriptionView[] → BBCode-строка
+    telegram/              ← адаптер Telegram
       TelegramBot.ts         grammy long-polling, команды бота
-      TelegramSender.ts      отправка в канал
-      TelegramOnlineHandler.ts / TelegramOfflineHandler.ts   NotificationHandler'ы
-    Notifiers/
-      NotificationDispatcher.ts  диспетчер + контракт: NotificationEvent, NotificationHandler,
-                                 NotificationSubscription
-      TSNotifier.ts          пишет описание канала через ChannelDescriptionEditor
-      LogNotifier.ts         пишет событие в лог
-    server/AdminServer.ts    node:http, POST-роуты → события
+      TelegramSender.ts      отправка текста в чат
+    persistence/           ← адаптер БД
+      ServerRepository.ts    findAllEnabled(): читает monitored_servers, парсит query_config JSON
+      ServerRepository.test.ts  интеграционный тест по живой MariaDB
+    admin/AdminServer.ts   ← адаптер HTTP: node:http, POST-роуты → события
+
     migrations/00_migration.sql  текущая схема (применяется вручную)
     test/databaseTestUtils.ts    migrate/truncate/fixture для тестов
-    Saiga.ts                 клиент к OpenAI-совместимому API (Ollama). Пока не подключён — см. §9
 ```
+
+Логика имён: **домен назван по задаче** (`monitoring`, `notifications`), **адаптеры — по тому, что они
+адаптируют** (`queriers`, `teamspeak`, `telegram`, `persistence`, `admin`). Технология в имени остаётся
+только там, где технология и есть суть.
 
 ## 3. Runtime-поток
 
@@ -120,11 +131,11 @@ teamSpeakMonitoring/         сам сервис
 
 | Интерфейс | Где объявлен | Кто реализует | Смысл |
 |---|---|---|---|
-| `Querier` | `a2s/ServerMonitor.ts` | `A2sQuerier`, `RestQuerier` | монитор не знает про протоколы опроса; принимает `ServerQueryConfig`, отдаёт `ServerQueryResult` |
-| `ChannelDescriptionEditor` | `Notifiers/TSNotifier.ts` | `TeamSpeakClient` | нотифаер не знает про ts3-библиотеку и соединение |
-| `StatusSource` | `tg/TelegramBot.ts` | `ServerMonitor` | боту нужен только `getSnapshot()` |
-| `OnlineNicknamesSource` | `tg/TelegramBot.ts` | `TeamSpeakClient` | боту нужен только список ников |
-| `NotificationHandler` | `Notifiers/NotificationDispatcher.ts` | `TSNotifier`, `LogNotifier`, `Telegram*Handler` | канал доставки заменяем |
+| `Querier` | `monitoring/ServerQuery.ts` | `A2sQuerier`, `RestQuerier` | монитор не знает про протоколы опроса; принимает `ServerQueryConfig`, отдаёт `ServerQueryResult` |
+| `ChannelDescriptionEditor` | `notifications/TSNotifier.ts` | `TeamSpeakClient` | нотифаер не знает про ts3-библиотеку и соединение |
+| `StatusSource` | `telegram/TelegramBot.ts` | `ServerMonitor` | боту нужен только `getSnapshot()` |
+| `OnlineNicknamesSource` | `telegram/TelegramBot.ts` | `TeamSpeakClient` | боту нужен только список ников |
+| `NotificationHandler` | `notifications/events.ts` | `TSNotifier`, `LogNotifier`, `Telegram*Handler` | канал доставки заменяем |
 
 Правила при доработках:
 
@@ -271,12 +282,19 @@ npm run test:repo  # только src/repositories/*.test.ts
    в чужой тип. Введён доменный `ServerQueryResult`; библиотечный тип заперт в `A2sQuerier`
    (`grep -rl "source-query" src/` находит только его). Заодно вскрылось и починено: `RestQuerier`
    не проверял форму ответа, и `players: undefined` молча уезжал в домен.
-4. Интерфейс `Querier` объявлен в `a2s/ServerMonitor.ts`, поэтому `queriers/*` зависят от модуля монитора.
-   Контракт стоит вынести в нейтральный модуль.
+4. ✅ **Закрыто, итерация 4.** Интерфейс `Querier` был объявлен в `ServerMonitor.ts`, из-за чего
+   `queriers/*` зависели от модуля своего потребителя. Перенесён в `monitoring/ServerQuery.ts`,
+   рядом с `ServerQueryConfig` и `ServerQueryResult`. Тем же движением вылечен такой же дефект
+   в уведомлениях: контракт (`NotificationEvent`, `NotificationHandler`, `NotificationSubscription`)
+   вынесен из `NotificationDispatcher.ts` в `notifications/events.ts`, и хендлеры больше
+   не импортируют файл, названный по диспетчеру.
 5. `queriers/*` делают непроверенный `config as A2sQueryConfig` / `as RestQueryConfig`. Работает только
    потому, что `ServerMonitor` выбирает querier по `type`. Стоит дискриминировать явно.
-6. Папка `a2s/` содержит вещи, не относящиеся к A2S: `ServerMonitor`, `ProbeScheduler`, `config`,
-   `TeamSpeakRender` (последний вообще принадлежит TeamSpeak-нотифаеру). Имя папки врёт.
+6. ✅ **Закрыто, итерация 4.** Папка `a2s/` содержала `ServerMonitor`, `ProbeScheduler`, `config`
+   и `TeamSpeakRender` — ничего из этого к протоколу A2S не относится. Раскладка переделана:
+   домен в `monitoring/` и `notifications/`, адаптеры в `queriers/`, `teamspeak/`, `telegram/`,
+   `persistence/`, `admin/`. Мёртвый массив-пример `servers` удалён, вместо него — описание
+   структуры строки `monitored_servers` в `MonitoredServer.ts`.
 7. 🟡 **Частично, итерация 2.** Логирование двумя стилями. `Logger` в конструктор получают
    `ServerMonitor`, `ServerProbe`, `TeamSpeakConnection`, `Scheduler`, `NotificationDispatcher`,
    `LogNotifier`. Глобальный `log` остался в `TelegramBot`, `AdminServer`, `A2sQuerier`,
@@ -297,6 +315,19 @@ npm run test:repo  # только src/repositories/*.test.ts
    опечатка = тихий no-op. Разбирается в итерации 5 вместе с типизацией событий по каналам.
    Частично закрыто в итерации 2: отказ хендлера теперь логируется с его именем, а не с бесполезным
    `handlerIndex`.
+
+20. `ServerMonitor` сам создаёт `new A2sQuerier()` и `new RestQuerier()` в инициализаторе поля,
+    поэтому `monitoring/` (домен) импортирует `queriers/` (адаптеры) — единственное нарушение правила
+    зависимостей после итерации 4. Тот же дефект, что был в `Notifier` до итерации 2: объект сам
+    конструирует свои зависимости вместо того, чтобы получать их. Лечится передачей набора queriers
+    из `main.ts`; попутно `ServerMonitor` станет тестируемым на фейковом querier.
+
+21. Хендлеры уведомлений лежат в `notifications/`, но по природе зависят от транспортов
+    (`TSNotifier` → `teamspeak/TeamSpeakRender`, `Telegram*Handler` → `telegram/TelegramSender`).
+    То есть `notifications/` — не чистый домен: там и ядро (`events`, `NotificationDispatcher`),
+    и адаптеры к транспортам. Альтернатива — держать каждый хендлер рядом с его транспортом.
+    Решение отложено до итерации 5, где у хендлеров появится явная политика и станет видно,
+    что в них домен, а что транспорт.
 
 **Поведение и надёжность**
 

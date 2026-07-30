@@ -1,5 +1,9 @@
-import type {Querier} from "../a2s/ServerMonitor.js";
-import type {A2sQueryConfig, ServerQueryConfig, ServerQueryResult} from "../a2s/config.js";
+import type {
+    A2sQueryConfig,
+    Querier,
+    ServerQueryConfig,
+    ServerQueryResult,
+} from "../monitoring/ServerQuery.js";
 import {type ServerInfo, SourceQuery} from "@callowayisweird/source-query";
 import {log} from "../logger.js";
 
