@@ -5,7 +5,7 @@ import type {
     NotificationSubscription,
 } from "./events.js";
 
-//Диспетчер, и только диспетчер: раздаёт событие всем подписанным на его тип хендлерам.
+//Диспетчер, и только диспетчер: раздаёт событие всем нотифаерам, подписанным на его тип.
 //Сам ничего не создаёт, про конфигурацию, адресатов и протоколы доставки не знает.
 export class NotificationDispatcher {
     private readonly subscriptionsByEvent = new Map<NotificationEventType, NotificationSubscription[]>();
@@ -26,7 +26,7 @@ export class NotificationDispatcher {
 
         //Отказ одного канала не должен ронять остальные, но и молчать о нём нельзя.
         const results = await Promise.allSettled(
-            subscriptions.map(subscription => subscription.handler.notify(event)),
+            subscriptions.map(subscription => subscription.notifier.notify(event)),
         );
 
         results.forEach((result, index) => {
@@ -37,10 +37,10 @@ export class NotificationDispatcher {
             this.logger.warn(
                 {
                     error: result.reason,
-                    handler: subscriptions[index]?.name,
+                    notifier: subscriptions[index]?.name,
                     event: event.type,
                 },
-                "Notification handler failed",
+                "Notification delivery failed",
             );
         });
     }

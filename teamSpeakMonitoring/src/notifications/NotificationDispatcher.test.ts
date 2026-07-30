@@ -4,7 +4,7 @@ import type {Logger} from "pino";
 import {
     NotificationDispatcher,
     type NotificationEvent,
-    type NotificationHandler,
+    type Notifier,
     type NotificationSubscription,
 } from "./NotificationDispatcher.js";
 
@@ -33,11 +33,11 @@ const serverOnline: NotificationEvent = {
     },
 };
 
-interface RecordingHandler extends NotificationHandler {
+interface RecordingNotifier extends Notifier {
     received: NotificationEvent[];
 }
 
-function createHandler(options: {failWith?: Error} = {}): RecordingHandler {
+function createNotifier(options: {failWith?: Error} = {}): RecordingNotifier {
     return {
         received: [],
         async notify(event: NotificationEvent): Promise<void> {
@@ -46,7 +46,7 @@ function createHandler(options: {failWith?: Error} = {}): RecordingHandler {
                 throw options.failWith;
             }
         },
-    } as RecordingHandler;
+    } as RecordingNotifier;
 }
 
 function createLogger(): {logger: Logger; warnings: Array<{context: Record<string, unknown>; message: string}>} {
@@ -62,13 +62,13 @@ function createLogger(): {logger: Logger; warnings: Array<{context: Record<strin
     return {logger, warnings};
 }
 
-function subscribe(event: NotificationSubscription["event"], name: string, handler: NotificationHandler): NotificationSubscription {
-    return {event, name, handler};
+function subscribe(event: NotificationSubscription["event"], name: string, notifier: Notifier): NotificationSubscription {
+    return {event, name, notifier};
 }
 
-test("событие уходит только тем хендлерам, что подписаны на его тип", async () => {
-    const onView = createHandler();
-    const onOnline = createHandler();
+test("событие уходит только тем нотифаерам, что подписаны на его тип", async () => {
+    const onView = createNotifier();
+    const onOnline = createNotifier();
     const dispatcher = new NotificationDispatcher(
         [subscribe("statusViewChanged", "view", onView), subscribe("serverOnline", "online", onOnline)],
         createLogger().logger,
@@ -77,12 +77,12 @@ test("событие уходит только тем хендлерам, что
     await dispatcher.notify(viewChanged);
 
     assert.deepEqual(onView.received, [viewChanged]);
-    assert.deepEqual(onOnline.received, [], "не подписанный на этот тип хендлер не вызывается");
+    assert.deepEqual(onOnline.received, [], "не подписанный на этот тип нотифаер не вызывается");
 });
 
-test("все хендлеры одного события вызываются", async () => {
-    const first = createHandler();
-    const second = createHandler();
+test("все нотифаеры одного события вызываются", async () => {
+    const first = createNotifier();
+    const second = createNotifier();
     const dispatcher = new NotificationDispatcher(
         [subscribe("statusViewChanged", "first", first), subscribe("statusViewChanged", "second", second)],
         createLogger().logger,
@@ -100,9 +100,9 @@ test("событие без подписчиков не приводит к ош
     await dispatcher.notify(serverOnline);
 });
 
-test("отказ одного хендлера не мешает остальным", async () => {
-    const failing = createHandler({failWith: new Error("канал недоступен")});
-    const healthy = createHandler();
+test("отказ одного нотифаера не мешает остальным", async () => {
+    const failing = createNotifier({failWith: new Error("канал недоступен")});
+    const healthy = createNotifier();
     const dispatcher = new NotificationDispatcher(
         [subscribe("statusViewChanged", "failing", failing), subscribe("statusViewChanged", "healthy", healthy)],
         createLogger().logger,
@@ -113,27 +113,27 @@ test("отказ одного хендлера не мешает остальн�
     assert.equal(healthy.received.length, 1, "исправный канал получил событие");
 });
 
-test("отказ хендлера логируется с его именем и типом события", async () => {
+test("отказ нотифаера логируется с его именем и типом события", async () => {
     //До итерации 2 отказ гасился allSettled и в лог попадал только бесполезный handlerIndex.
     const {logger, warnings} = createLogger();
     const failure = new Error("канал недоступен");
     const dispatcher = new NotificationDispatcher(
-        [subscribe("serverOnline", "telegram:online", createHandler({failWith: failure}))],
+        [subscribe("serverOnline", "telegram:online", createNotifier({failWith: failure}))],
         logger,
     );
 
     await dispatcher.notify(serverOnline);
 
     assert.equal(warnings.length, 1);
-    assert.equal(warnings[0]?.message, "Notification handler failed");
-    assert.equal(warnings[0]?.context.handler, "telegram:online");
+    assert.equal(warnings[0]?.message, "Notification delivery failed");
+    assert.equal(warnings[0]?.context.notifier, "telegram:online");
     assert.equal(warnings[0]?.context.event, "serverOnline");
     assert.equal(warnings[0]?.context.error, failure, "в лог попадает сама ошибка, а не её индекс");
 });
 
 test("успешная доставка ничего не логирует", async () => {
     const {logger, warnings} = createLogger();
-    const dispatcher = new NotificationDispatcher([subscribe("statusViewChanged", "log", createHandler())], logger);
+    const dispatcher = new NotificationDispatcher([subscribe("statusViewChanged", "log", createNotifier())], logger);
 
     await dispatcher.notify(viewChanged);
 

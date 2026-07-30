@@ -1,7 +1,7 @@
-import type {NotificationEvent, NotificationHandler} from "./events.js";
+import type {NotificationEvent, Notifier} from "./events.js";
 import type {TelegramSender} from "../telegram/TelegramSender.js";
 
-export class TelegramOfflineHandler implements NotificationHandler {
+export class TelegramOfflineNotifier implements Notifier {
     constructor(private readonly sender: TelegramSender) {
     }
 

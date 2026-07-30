@@ -5,11 +5,14 @@ import type {
     ServerQueryResult,
 } from "../monitoring/ServerQuery.js";
 import {type ServerInfo, SourceQuery} from "@callowayisweird/source-query";
-import {log} from "../logger.js";
+import type {Logger} from "pino";
 
 //Единственное место в проекте, которому позволено знать тип ServerInfo из библиотеки A2S.
 //Наружу отдаётся доменный ServerQueryResult.
 export class A2sQuerier implements Querier {
+    constructor(private readonly logger: Logger) {
+    }
+
     public async query(config: ServerQueryConfig): Promise<ServerQueryResult | undefined> {
         const a2sConfig = config as A2sQueryConfig;
         const query = new SourceQuery({
@@ -21,7 +24,7 @@ export class A2sQuerier implements Querier {
         try {
             return this.toQueryResult(await query.info());
         } catch (error) {
-            log.debug(`A2S query failed for ${a2sConfig.host}:${a2sConfig.port}`);
+            this.logger.debug(`A2S query failed for ${a2sConfig.host}:${a2sConfig.port}`);
             return undefined;
         }
     }

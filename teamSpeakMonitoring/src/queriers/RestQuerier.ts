@@ -4,9 +4,12 @@ import type {
     ServerQueryConfig,
     ServerQueryResult,
 } from "../monitoring/ServerQuery.js";
-import {log} from "../logger.js";
+import type {Logger} from "pino";
 
 export class RestQuerier implements Querier {
+    constructor(private readonly logger: Logger) {
+    }
+
     public async query(config: ServerQueryConfig): Promise<ServerQueryResult | undefined> {
         const restConfig = config as RestQueryConfig;
         const controller = new AbortController();
@@ -26,7 +29,7 @@ export class RestQuerier implements Querier {
 
             return this.toQueryResult(await response.json(), restConfig.url);
         } catch (error) {
-            log.debug(`REST query failed for ${restConfig.url}: ${error instanceof Error ? error.message : String(error)}`);
+            this.logger.debug(`REST query failed for ${restConfig.url}: ${error instanceof Error ? error.message : String(error)}`);
             return undefined;
         } finally {
             clearTimeout(timeoutId);
@@ -38,14 +41,14 @@ export class RestQuerier implements Querier {
     //Непригодный ответ приравнивается к неудачному опросу — контракт Querier это допускает.
     private toQueryResult(payload: unknown, url: string): ServerQueryResult | undefined {
         if (!payload || typeof payload !== "object") {
-            log.debug(`REST query for ${url} returned a non-object payload`);
+            this.logger.debug(`REST query for ${url} returned a non-object payload`);
             return undefined;
         }
 
         const {players, maxPlayers} = payload as Record<string, unknown>;
 
         if (!Number.isFinite(players) || !Number.isFinite(maxPlayers)) {
-            log.debug(`REST query for ${url} returned no usable players/maxPlayers`);
+            this.logger.debug(`REST query for ${url} returned no usable players/maxPlayers`);
             return undefined;
         }
 

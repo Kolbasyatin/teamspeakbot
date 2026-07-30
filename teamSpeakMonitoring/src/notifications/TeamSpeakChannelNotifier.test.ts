@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {TSNotifier, type ChannelDescriptionEditor} from "./TSNotifier.js";
+import {TeamSpeakChannelNotifier, type ChannelDescriptionEditor} from "./TeamSpeakChannelNotifier.js";
 import type {NotificationEvent} from "./events.js";
 
 const viewChanged: NotificationEvent = {
@@ -46,7 +46,7 @@ function createEditor(options: {failOn?: string} = {}): RecordingEditor {
 
 test("описание пишется во все настроенные каналы", async () => {
     const editor = createEditor();
-    const notifier = new TSNotifier(editor, ["ServerInfo", "ServerInfoBackup"]);
+    const notifier = new TeamSpeakChannelNotifier(editor, ["ServerInfo", "ServerInfoBackup"]);
 
     await notifier.notify(viewChanged);
 
@@ -60,7 +60,7 @@ test("описание пишется во все настроенные кан�
 
 test("в описание попадают имена и счёт игроков всех серверов", async () => {
     const editor = createEditor();
-    const notifier = new TSNotifier(editor, ["ServerInfo"]);
+    const notifier = new TeamSpeakChannelNotifier(editor, ["ServerInfo"]);
 
     await notifier.notify(viewChanged);
     const description = editor.calls[0]?.description ?? "";
@@ -73,7 +73,7 @@ test("в описание попадают имена и счёт игроков
 
 test("события других типов игнорируются", async () => {
     const editor = createEditor();
-    const notifier = new TSNotifier(editor, ["ServerInfo"]);
+    const notifier = new TeamSpeakChannelNotifier(editor, ["ServerInfo"]);
 
     await notifier.notify(serverOnline);
 
@@ -83,7 +83,7 @@ test("события других типов игнорируются", async ()
 test("отказ одного канала не мешает попытке обновить остальные, но виден снаружи", async () => {
     //Итерация 2: раньше здесь был allSettled, и отказ правки канала пропадал бесследно.
     const editor = createEditor({failOn: "Broken"});
-    const notifier = new TSNotifier(editor, ["Broken", "ServerInfo"]);
+    const notifier = new TeamSpeakChannelNotifier(editor, ["Broken", "ServerInfo"]);
 
     await assert.rejects(
         () => notifier.notify(viewChanged),
@@ -100,7 +100,7 @@ test("отказ одного канала не мешает попытке об
 
 test("пустой список каналов не приводит к обращениям", async () => {
     const editor = createEditor();
-    const notifier = new TSNotifier(editor, []);
+    const notifier = new TeamSpeakChannelNotifier(editor, []);
 
     await notifier.notify(viewChanged);
 

@@ -41,11 +41,11 @@ export interface TeamSpeakProperties {
     protocol: TeamSpeak.QueryProtocol;
 }
 
-export interface TSNotifierChannelNames {
+export interface TeamSpeakChannelNames {
     channels: string[];
 }
 
-const channelsNotifierName = convict<TSNotifierChannelNames>({
+const teamSpeakChannelsConfig = convict<TeamSpeakChannelNames>({
     channels: {
         doc: "TeamSpeak channel names for notifier",
         format: "comma-separated-string-array",
@@ -196,13 +196,13 @@ const databaseConfig = convict<DatabaseProperties>({
 config.validate({allowed: "strict"});
 databaseConfig.validate({allowed: "strict"});
 syncServerConfig.validate({allowed: "strict"});
-channelsNotifierName.validate({allowed: "strict"});
+teamSpeakChannelsConfig.validate({allowed: "strict"});
 tgConfig.validate({allowed: "strict"});
 monitorConfig.validate({allowed: "strict"});
 
 export const properties: TeamSpeakProperties = config.getProperties();
 export const dbConfig = databaseConfig.getProperties()
 export const syncConfig = syncServerConfig.getProperties()
-export const tsNotifierChannelNames = channelsNotifierName.getProperties();
+export const teamSpeakChannelNames = teamSpeakChannelsConfig.getProperties();
 export const tgProperties = tgConfig.getProperties();
 export const monitorProperties = monitorConfig.getProperties();

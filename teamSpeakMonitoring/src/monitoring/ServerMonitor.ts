@@ -1,9 +1,7 @@
 import {ServerProbe, type ServerSnapshot, type ServerStatus} from "./ServerProbe.js";
 import {EventEmitter} from "node:events";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
-import type {Querier, ServerQueryConfig, ServerQueryResult} from "./ServerQuery.js";
-import {A2sQuerier} from "../queriers/A2sQuerier.js";
-import {RestQuerier} from "../queriers/RestQuerier.js";
+import type {Querier, QuerierRegistry, ServerQueryConfig, ServerQueryResult} from "./ServerQuery.js";
 import {type ScheduledTask, Scheduler} from "./Scheduler.js";
 import {type MonitorProperties} from "../properties.js";
 import type {Logger} from "pino";
@@ -21,17 +19,16 @@ export class ServerMonitor extends EventEmitter {
 
     private lastViewKey?: string;
     private readonly probes = new Map<number, ServerProbe>();
-    private readonly queriers = new Map<ServerQueryConfig["type"], Querier>([
-        ["a2s", new A2sQuerier()],
-        ["rest", new RestQuerier()]
-    ])
     //Создаётся в конструкторе, а не инициализатором поля: инициализаторы полей выполняются
     //раньше, чем присваиваются параметры-свойства, и logger там был бы ещё undefined.
     private readonly scheduler: Scheduler<ScheduledTask>;
 
     public constructor(
-        private options: MonitorProperties,
-        private logger: Logger
+        private readonly options: MonitorProperties,
+        private readonly logger: Logger,
+        //Реализации опроса приходят из composition root: монитору незачем знать ни про A2S,
+        //ни про REST, ни про то, что появится дальше.
+        private readonly queriers: QuerierRegistry,
     ) {
         super();
         this.scheduler = new Scheduler<ScheduledTask>(this.logger);
@@ -138,8 +135,10 @@ export class ServerMonitor extends EventEmitter {
         }));
     }
 
+    //Проверка остаётся, несмотря на то что QuerierRegistry покрывает все варианты union:
+    //query_type приходит из БД обычной строкой, и там может лежать что угодно.
     private getQuerier(type: ServerQueryConfig["type"]): Querier {
-        const querier = this.queriers.get(type);
+        const querier = this.queriers[type];
 
         if (!querier) {
             throw new Error(`Unsupported query type: ${type}`);

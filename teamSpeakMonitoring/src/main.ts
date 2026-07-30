@@ -1,5 +1,7 @@
 import "dotenv-flow/config";
 import {ServerMonitor} from "./monitoring/ServerMonitor.js";
+import {A2sQuerier} from "./queriers/A2sQuerier.js";
+import {RestQuerier} from "./queriers/RestQuerier.js";
 import {log} from "./logger.js";
 import {AdminServer} from "./admin/AdminServer.js";
 import {ServerRepository} from "./persistence/ServerRepository.js";
@@ -10,17 +12,17 @@ import {
     syncConfig,
     tgProperties,
     monitorProperties,
-    tsNotifierChannelNames,
+    teamSpeakChannelNames,
 } from "./properties.js";
 import {notifierConfig} from "./notifierConfig.js";
 import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js";
 import type {NotificationSubscription} from "./notifications/events.js";
-import {TSNotifier} from "./notifications/TSNotifier.js";
+import {TeamSpeakChannelNotifier} from "./notifications/TeamSpeakChannelNotifier.js";
 import {LogNotifier} from "./notifications/LogNotifier.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TelegramSender} from "./telegram/TelegramSender.js";
-import {TelegramOnlineHandler} from "./notifications/TelegramOnlineHandler.js";
-import {TelegramOfflineHandler} from "./notifications/TelegramOfflineHandler.js";
+import {TelegramOnlineNotifier} from "./notifications/TelegramOnlineNotifier.js";
+import {TelegramOfflineNotifier} from "./notifications/TelegramOfflineNotifier.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
 import {Bot} from "grammy";
@@ -35,7 +37,12 @@ const startupDbRetry = {
 } as const;
 
 async function main(): Promise<any> {
-    const monitor: ServerMonitor = new ServerMonitor(monitorProperties, log);
+    //Реализации опроса живут здесь: монитор про протоколы не знает. Добавление типа запроса
+    //в ServerQueryConfig валит сборку, пока сюда не добавят его querier.
+    const monitor: ServerMonitor = new ServerMonitor(monitorProperties, log, {
+        a2s: new A2sQuerier(log),
+        rest: new RestQuerier(log),
+    });
     //Одно query-подключение к TeamSpeak на процесс: его делят нотифаер и команды бота.
     const teamSpeakConnection = new TeamSpeakConnection(properties, log);
     const teamSpeakClient = new TeamSpeakClient(teamSpeakConnection);
@@ -59,14 +66,14 @@ async function main(): Promise<any> {
     }
 
     //Единственное место, где решается, что куда отправляется. Выключенный канал не создаётся
-    //вовсе, поэтому хендлерам не нужен ни флаг активности, ни знание о конфигурации.
+    //вовсе, поэтому нотифаерам не нужен ни флаг активности, ни знание о конфигурации.
     const subscriptions: NotificationSubscription[] = [];
 
     if (notifierConfig.log) {
         subscriptions.push({
             event: "statusViewChanged",
             name: "log",
-            handler: new LogNotifier(log),
+            notifier: new LogNotifier(log),
         });
     }
 
@@ -74,7 +81,7 @@ async function main(): Promise<any> {
         subscriptions.push({
             event: "statusViewChanged",
             name: "teamspeak",
-            handler: new TSNotifier(teamSpeakClient, tsNotifierChannelNames.channels),
+            notifier: new TeamSpeakChannelNotifier(teamSpeakClient, teamSpeakChannelNames.channels),
         });
     }
 
@@ -84,12 +91,12 @@ async function main(): Promise<any> {
         subscriptions.push({
             event: "serverOnline",
             name: "telegram:online",
-            handler: new TelegramOnlineHandler(telegramSender),
+            notifier: new TelegramOnlineNotifier(telegramSender),
         });
         subscriptions.push({
             event: "serverOffline",
             name: "telegram:offline",
-            handler: new TelegramOfflineHandler(telegramSender),
+            notifier: new TelegramOfflineNotifier(telegramSender),
         });
     }
 

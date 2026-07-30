@@ -33,3 +33,9 @@ export interface ServerQueryResult {
 export interface Querier {
     query(config: ServerQueryConfig): Promise<ServerQueryResult | undefined>;
 }
+
+//Record, а не Map, намеренно: компилятор требует querier для КАЖДОГО варианта ServerQueryConfig.
+//Добавили тип запроса в union — сборка падает, пока в composition root не появится его реализация.
+//От мусора в БД это не спасает (там строки не типизированы), поэтому в мониторе остаётся
+//проверка в рантайме.
+export type QuerierRegistry = Record<ServerQueryConfig["type"], Querier>;

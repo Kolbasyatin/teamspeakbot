@@ -1,12 +1,12 @@
-import type {NotificationEvent, NotificationHandler} from "./events.js";
-import {TeamSpeakRender} from "../teamspeak/TeamSpeakRender.js";
+import type {NotificationEvent, Notifier} from "./events.js";
+import {ChannelDescriptionRenderer} from "../teamspeak/ChannelDescriptionRenderer.js";
 
 //Нотифаеру нужна одна операция, про соединение и библиотеку TeamSpeak он не знает.
 export interface ChannelDescriptionEditor {
     editChannelDescription(channelName: string, description: string): Promise<void>;
 }
 
-export class TSNotifier implements NotificationHandler {
+export class TeamSpeakChannelNotifier implements Notifier {
 
     constructor(
         private readonly channelEditor: ChannelDescriptionEditor,
@@ -22,7 +22,7 @@ export class TSNotifier implements NotificationHandler {
         }
 
         //TODO: рендерер вынести в конструктор — итерация 5, вместе с политикой уведомлений.
-        const description = TeamSpeakRender.render(event.view);
+        const description = ChannelDescriptionRenderer.render(event.view);
 
         //map запускает правку всех каналов сразу, поэтому Promise.all не мешает остальным каналам
         //обновиться. Но, в отличие от allSettled, отказ виден NotificationDispatcher и попадает в лог.

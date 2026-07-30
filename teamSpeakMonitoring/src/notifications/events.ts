@@ -13,7 +13,7 @@ export type NotificationEvent =
 export type NotificationEventType = NotificationEvent["type"];
 
 //Канал доставки. Ресурсами (соединения, боты) владеет composition root, поэтому close() здесь нет.
-export interface NotificationHandler {
+export interface Notifier {
     notify(event: NotificationEvent): Promise<void>;
 }
 
@@ -22,5 +22,5 @@ export interface NotificationHandler {
 export interface NotificationSubscription {
     event: NotificationEventType;
     name: string;
-    handler: NotificationHandler;
+    notifier: Notifier;
 }

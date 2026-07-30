@@ -1,6 +1,6 @@
 import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
 
-export class TeamSpeakRender {
+export class ChannelDescriptionRenderer {
     public static render(view: ServerDescriptionView[]): string {
         const body = view
             .map(server => {

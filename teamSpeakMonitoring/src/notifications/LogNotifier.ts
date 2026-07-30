@@ -1,7 +1,7 @@
-import type {NotificationEvent, NotificationHandler} from "./events.js";
+import type {NotificationEvent, Notifier} from "./events.js";
 import type {Logger} from "pino";
 
-export class LogNotifier implements NotificationHandler {
+export class LogNotifier implements Notifier {
     constructor(private readonly logger: Logger) {
     }
 
