@@ -18,6 +18,7 @@ import {notifierConfig} from "./notifierConfig.js";
 import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js";
 import {subscribe, type NotificationSubscription} from "./notifications/events.js";
 import {TeamSpeakChannelNotifier} from "./notifications/TeamSpeakChannelNotifier.js";
+import {LatestOnlyNotifier} from "./notifications/LatestOnlyNotifier.js";
 import {LogNotifier} from "./notifications/LogNotifier.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TelegramSender} from "./telegram/TelegramSender.js";
@@ -73,10 +74,16 @@ async function main(): Promise<any> {
     }
 
     if (notifierConfig.teamspeak) {
+        //Описание канала — табло текущего состояния, а не журнал: пока идёт запись, промежуточные
+        //обновления не нужны. Без обёртки они копятся очередью на единственном SSH-соединении.
+        //Telegram оборачивать нельзя — там каждое событие самостоятельный факт.
         subscriptions.push(subscribe(
             "statusViewChanged",
             "teamspeak",
-            new TeamSpeakChannelNotifier(teamSpeakClient, teamSpeakChannelNames.channels),
+            new LatestOnlyNotifier(
+                new TeamSpeakChannelNotifier(teamSpeakClient, teamSpeakChannelNames.channels),
+                log,
+            ),
         ));
     }
 
