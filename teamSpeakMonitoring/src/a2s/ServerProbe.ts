@@ -1,5 +1,4 @@
-import type {ServerMonitorConfig} from "./config.js";
-import type {ServerInfo as ServerInfoResponse} from "@callowayisweird/source-query";
+import type {ServerMonitorConfig, ServerQueryResult} from "./config.js";
 import {EventEmitter} from "node:events";
 import type {Logger} from "pino";
 
@@ -9,8 +8,8 @@ export interface ServerSnapshot {
     config: ServerMonitorConfig;
     status: ServerStatus;
     failedChecks: number;
-    info: ServerInfoResponse | undefined;
-    lastInfo: ServerInfoResponse | undefined;
+    info: ServerQueryResult | undefined;
+    lastInfo: ServerQueryResult | undefined;
     statusSince: Date;
 }
 
@@ -23,7 +22,7 @@ interface ServerStatusEvent {
 export class ServerProbe extends EventEmitter {
     private status: ServerStatus = 'unknown';
     private failedChecks: number = 0;
-    private lastInfo: ServerInfoResponse | undefined;
+    private lastInfo: ServerQueryResult | undefined;
 
     constructor(
         private readonly serverData: ServerMonitorConfig,
@@ -34,7 +33,7 @@ export class ServerProbe extends EventEmitter {
         super();
     }
 
-    public handleResult(result: ServerInfoResponse | undefined): void {
+    public handleResult(result: ServerQueryResult | undefined): void {
         const previousStatus = this.status;
         const previousInfo = this.lastInfo;
         //Статус сервера определяется только лишь тем, пришел ли ответ. Если да, то он точно online
@@ -58,7 +57,7 @@ export class ServerProbe extends EventEmitter {
         };
     }
 
-    private statusSuccess(result: ServerInfoResponse): void {
+    private statusSuccess(result: ServerQueryResult): void {
         this.status = 'online';
         this.failedChecks = 0;
         this.lastInfo = result;
@@ -74,7 +73,7 @@ export class ServerProbe extends EventEmitter {
         }
     }
 
-    private commitChanges(previousServerStatus: ServerStatus, previousInfo: ServerInfoResponse | undefined): void {
+    private commitChanges(previousServerStatus: ServerStatus, previousInfo: ServerQueryResult | undefined): void {
 
         if (this.lastInfo?.players !== previousInfo?.players) {
             this.emit('playersChanged', this.getSnapshot());

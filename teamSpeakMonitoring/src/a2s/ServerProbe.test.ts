@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Logger} from "pino";
-import type {ServerInfo} from "@callowayisweird/source-query";
 import {ServerProbe, type ServerSnapshot} from "./ServerProbe.js";
-import type {ServerMonitorConfig} from "./config.js";
+import type {ServerMonitorConfig, ServerQueryResult} from "./config.js";
 
 //Характеризационные тесты: фиксируют поведение как есть, до рефакторинга.
 //Порог намеренно меньше боевого (5), чтобы тесты читались.
@@ -16,25 +15,10 @@ const serverConfig: ServerMonitorConfig = {
     query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000},
 };
 
-//ServerInfo из библиотеки A2S требует 15 полей, а домену нужны два: players и maxPlayers.
-//Ровно эта протечка убирается в итерации 3.
-function serverInfo(players: number, maxPlayers: number = 64): ServerInfo {
-    return {
-        protocol: 17,
-        name: "Test server",
-        map: "Everon",
-        folder: "reforger",
-        game: "Arma Reforger",
-        appId: 1874880,
-        players,
-        maxPlayers,
-        bots: 0,
-        serverType: "d",
-        os: "l",
-        visibility: false,
-        vac: false,
-        version: "1.0.0",
-    };
+//До итерации 3 здесь собирался ServerInfo из библиотеки A2S: 15 обязательных полей, из которых
+//домен читал два. Теперь это доменный тип, и фикстура равна тому, что домен действительно знает.
+function serverInfo(players: number, maxPlayers: number = 64): ServerQueryResult {
+    return {players, maxPlayers};
 }
 
 const silentLogger = {

@@ -22,6 +22,16 @@ export interface RestQueryConfig {
     timeout: number;
 }
 
+//Что querier отдаёт домену. Симметрично ServerQueryConfig: то на входе, это на выходе.
+//Содержит ровно то, что домен читает, — никаких полей "на будущее" и ничего от библиотек:
+//типы конкретных протоколов заперты внутри своих queriers и наружу не выходят.
+//Добавление поля (например, размера очереди Arma Reforger) = строка здесь плюс маппинг
+//в тех queriers, которые это поле реально умеют отдавать.
+export interface ServerQueryResult {
+    players: number;
+    maxPlayers: number;
+}
+
 
 //Все перенесено в БД. Оставил для примера.
 export const servers: ServerMonitorConfig[] = [

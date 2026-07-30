@@ -42,7 +42,8 @@ teamSpeakMonitoring/         сам сервис
     notifierConfig.ts        convict-флаги включения нотифаеров
     logger.ts                pino (pino-pretty вне production)
     a2s/
-      config.ts              ServerMonitorConfig, ServerQueryConfig (a2s | rest) + мёртвый пример
+      config.ts              ServerMonitorConfig, ServerQueryConfig (a2s | rest),
+                             ServerQueryResult (что querier отдаёт домену) + мёртвый пример
       ServerMonitor.ts       владеет probes, шедулит опрос, эмитит viewChanged/serverOnline/Offline
       ServerProbe.ts         состояние одного сервера, эмитит online/offline/playersChanged
       ProbeScheduler.ts      generic Scheduler<TTask>: per-task setTimeout, sync без сброса таймеров
@@ -119,7 +120,7 @@ teamSpeakMonitoring/         сам сервис
 
 | Интерфейс | Где объявлен | Кто реализует | Смысл |
 |---|---|---|---|
-| `Querier` | `a2s/ServerMonitor.ts` | `A2sQuerier`, `RestQuerier` | монитор не знает про протоколы опроса |
+| `Querier` | `a2s/ServerMonitor.ts` | `A2sQuerier`, `RestQuerier` | монитор не знает про протоколы опроса; принимает `ServerQueryConfig`, отдаёт `ServerQueryResult` |
 | `ChannelDescriptionEditor` | `Notifiers/TSNotifier.ts` | `TeamSpeakClient` | нотифаер не знает про ts3-библиотеку и соединение |
 | `StatusSource` | `tg/TelegramBot.ts` | `ServerMonitor` | боту нужен только `getSnapshot()` |
 | `OnlineNicknamesSource` | `tg/TelegramBot.ts` | `TeamSpeakClient` | боту нужен только список ников |
@@ -132,8 +133,10 @@ teamSpeakMonitoring/         сам сервис
 - Новый канал уведомлений → класс, реализующий `NotificationHandler`, плюс одна запись
   в списке `subscriptions` **в `main.ts`**. `NotificationDispatcher` при этом не меняется —
   он про конкретные каналы ничего не знает.
-- Всё, что зависит от конкретной библиотеки, живёт в одном адаптере (`TeamSpeakClient`, `TelegramSender`,
-  `*Querier`). Не протаскивать типы библиотек в домен (сейчас это нарушено — см. §8).
+- Всё, что зависит от конкретной библиотеки, живёт в одном адаптере (`TeamSpeakClient`,
+  `TelegramSender`, `*Querier`). Типы библиотек в домен не протаскиваются: querier обязан отдать
+  доменный `ServerQueryResult`, а библиотечный тип оставить у себя. Проверяется командой
+  `grep -rl "source-query" src/` — она должна находить только `A2sQuerier.ts`.
 - Зависимости отдаются через конструктор из `main.ts`. Модуль не должен сам читать глобальный конфиг.
   Единственные оставшиеся импорты из `properties.js` вне `main.ts` — это `import type` интерфейсов
   (`TeamSpeakProperties`, `MonitorProperties`): типы, а не синглтоны, значения по-прежнему инжектятся.
@@ -263,9 +266,11 @@ npm run test:repo  # только src/repositories/*.test.ts
 2. ✅ **Закрыто, итерация 2.** Второй экземпляр grammy `Bot` создавался внутри `Notifier`
    для `TelegramSender`, хотя `TelegramBot` уже держал свой на том же токене. Теперь `Bot` создаётся
    один раз в `main.ts` (и только при непустом токене) и отдаётся обоим.
-3. Тип `ServerInfo` из `@callowayisweird/source-query` протёк через все слои (`ServerProbe`,
-   `ServerMonitor`, snapshot'ы, и `RestQuerier` вынужден кастовать свой объект в чужой тип). Нужен
-   собственный domain-тип результата опроса, а библиотечный оставить внутри `A2sQuerier`.
+3. ✅ **Закрыто, итерация 3.** Тип `ServerInfo` из `@callowayisweird/source-query` протекал через
+   все слои (`ServerProbe`, `ServerMonitor`, snapshot'ы), а `RestQuerier` кастовал свой объект
+   в чужой тип. Введён доменный `ServerQueryResult`; библиотечный тип заперт в `A2sQuerier`
+   (`grep -rl "source-query" src/` находит только его). Заодно вскрылось и починено: `RestQuerier`
+   не проверял форму ответа, и `players: undefined` молча уезжал в домен.
 4. Интерфейс `Querier` объявлен в `a2s/ServerMonitor.ts`, поэтому `queriers/*` зависят от модуля монитора.
    Контракт стоит вынести в нейтральный модуль.
 5. `queriers/*` делают непроверенный `config as A2sQueryConfig` / `as RestQueryConfig`. Работает только

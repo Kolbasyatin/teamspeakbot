@@ -1,7 +1,6 @@
 import {ServerProbe, type ServerSnapshot, type ServerStatus} from "./ServerProbe.js";
 import {EventEmitter} from "node:events";
-import type {ServerMonitorConfig, ServerQueryConfig} from "./config.js";
-import {type ServerInfo} from "@callowayisweird/source-query";
+import type {ServerMonitorConfig, ServerQueryConfig, ServerQueryResult} from "./config.js";
 import {log} from "../logger.js";
 import {A2sQuerier} from "../queriers/A2sQuerier.js";
 import {RestQuerier} from "../queriers/RestQuerier.js";
@@ -19,7 +18,7 @@ export type ServerDescriptionView = {
 };
 
 export interface Querier {
-    query(config: ServerQueryConfig): Promise<ServerInfo | undefined>;
+    query(config: ServerQueryConfig): Promise<ServerQueryResult | undefined>;
 }
 
 export class ServerMonitor extends EventEmitter {
@@ -50,7 +49,7 @@ export class ServerMonitor extends EventEmitter {
     private async pollProbe(probe: ServerProbe): Promise<void> {
         this.logger.debug(`Poll сервера ${probe.getServerName()} с периодом ${this.getNextPollDelayMs(probe)} мс.`);
         const config: ServerMonitorConfig = probe.getSnapshot().config;
-        const result: ServerInfo | undefined = await this.getQuerier(config.query.type).query(config.query);
+        const result: ServerQueryResult | undefined = await this.getQuerier(config.query.type).query(config.query);
         probe.handleResult(result);
     }
 
