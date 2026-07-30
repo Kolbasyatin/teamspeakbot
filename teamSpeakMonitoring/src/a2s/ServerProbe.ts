@@ -65,7 +65,9 @@ export class ServerProbe extends EventEmitter {
     }
 
     private statusFailure() {
-        this.failedChecks += 1;
+        //Счётчик нужен только на пути к offline, поэтому ограничен порогом:
+        //иначе у давно лежащего сервера он растёт неограниченно и теряет смысл.
+        this.failedChecks = Math.min(this.failedChecks + 1, this.maxFailedChecks);
 
         if (this.failedChecks >= this.maxFailedChecks) {
             this.status = 'offline';

@@ -30,13 +30,16 @@ export class ServerMonitor extends EventEmitter {
         ["a2s", new A2sQuerier()],
         ["rest", new RestQuerier()]
     ])
-    private readonly scheduler = new Scheduler<ScheduledTask>();
+    //Создаётся в конструкторе, а не инициализатором поля: инициализаторы полей выполняются
+    //раньше, чем присваиваются параметры-свойства, и logger там был бы ещё undefined.
+    private readonly scheduler: Scheduler<ScheduledTask>;
 
     public constructor(
         private options: MonitorProperties,
         private logger: Logger
     ) {
         super();
+        this.scheduler = new Scheduler<ScheduledTask>(this.logger);
     }
     
     public start(): void {

@@ -9,6 +9,15 @@ import {Notifier} from "./Notifiers/Notifiers.js";
 import {TelegramBot} from "./tg/TelegramBot.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
+import {retry} from "./retry.js";
+
+//БД может подняться позже нас (в compose она стартует рядом), поэтому первое чтение серверов
+//не должно ронять процесс. Суммарно даёт около 90 секунд на готовность MariaDB.
+const startupDbRetry = {
+    attempts: 10,
+    initialDelayMs: 1_000,
+    maxDelayMs: 15_000,
+} as const;
 
 async function main(): Promise<any> {
     const monitor: ServerMonitor = new ServerMonitor(monitorProperties, log);
@@ -92,10 +101,23 @@ async function main(): Promise<any> {
         })
     });
 
-    void await syncMonitorServersFromRepository();
+    void await retry(syncMonitorServersFromRepository, {
+        ...startupDbRetry,
+        onRetry: (error, attempt, nextDelayMs) => {
+            log.warn(
+                {error, attempt, nextDelayMs},
+                "Не удалось прочитать серверы из БД, повторяю",
+            );
+        },
+    });
     void await adminWebServer.start();
     void monitor.start();
     void telegramBot.start();
 }
 
-void await main();
+try {
+    await main();
+} catch (error) {
+    log.fatal({error}, "Не удалось запустить приложение");
+    process.exit(1);
+}

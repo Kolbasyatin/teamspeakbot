@@ -7,3 +7,4 @@
 teamSpeakMonitoring/dist
 teamSpeakMonitoring/node_modules
 /http-client.private.env.json
+.claude

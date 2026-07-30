@@ -1,3 +1,5 @@
+import type {Logger} from "pino";
+
 export type ScheduledTaskId = number | string;
 
 export interface ScheduledTask {
@@ -9,9 +11,15 @@ export interface ScheduledTask {
 }
 
 export class Scheduler<TTask extends ScheduledTask> {
+    //Задержка на случай, если сама задача не смогла сказать, когда её запускать снова.
+    private static readonly FALLBACK_DELAY_MS = 5_000;
+
     private readonly tasks = new Map<ScheduledTaskId, TTask>();
     private readonly timers = new Map<ScheduledTaskId, NodeJS.Timeout>();
     private running = false;
+
+    public constructor(private readonly logger: Logger) {
+    }
 
     public sync(tasks: Iterable<TTask>): void {
         const nextTasks = new Map<ScheduledTaskId, TTask>();
@@ -82,11 +90,31 @@ export class Scheduler<TTask extends ScheduledTask> {
         if (!task) {
             return;
         }
-        await task.run();
+
+        //Инвариант: задача обязана получить следующий запуск по любому пути исполнения.
+        //Без этого одно исключение навсегда выкидывает её из планирования.
+        try {
+            await task.run();
+        } catch (error) {
+            this.logger.error({error, taskId}, "Scheduled task failed");
+        }
+
         if (!this.running) {
             return;
         }
-        this.schedule(taskId, task.getNextDelayMs());
+        this.schedule(taskId, this.getNextDelayMs(task));
+    }
+
+    private getNextDelayMs(task: TTask): number {
+        try {
+            return task.getNextDelayMs();
+        } catch (error) {
+            this.logger.error(
+                {error, taskId: task.id, fallbackDelayMs: Scheduler.FALLBACK_DELAY_MS},
+                "Scheduled task failed to report next delay",
+            );
+            return Scheduler.FALLBACK_DELAY_MS;
+        }
     }
 
     private cancel(taskId: ScheduledTaskId): void {
