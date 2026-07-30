@@ -26,7 +26,7 @@ export class NotificationDispatcher {
 
         //Отказ одного канала не должен ронять остальные, но и молчать о нём нельзя.
         const results = await Promise.allSettled(
-            subscriptions.map(subscription => subscription.notifier.notify(event)),
+            subscriptions.map(subscription => subscription.notify(event)),
         );
 
         results.forEach((result, index) => {

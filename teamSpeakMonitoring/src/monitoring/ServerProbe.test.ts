@@ -37,9 +37,8 @@ function createProbe(): ServerProbe {
 function recordEvents(probe: ServerProbe): string[] {
     const events: string[] = [];
 
-    for (const name of ["playersChanged", "serverStatusChanged", "online", "offline"]) {
-        probe.on(name, () => events.push(name));
-    }
+    probe.on("online", () => events.push("online"));
+    probe.on("offline", () => events.push("offline"));
 
     return events;
 }
@@ -70,8 +69,7 @@ test("первый успешный ответ переводит probe в onlin
     assert.equal(snapshot.failedChecks, 0);
     assert.equal(snapshot.info?.players, 10);
     assert.equal(snapshot.info?.maxPlayers, 64);
-    //Число игроков изменилось с undefined на 10, поэтому playersChanged тоже эмитится.
-    assert.deepEqual(events, ["playersChanged", "serverStatusChanged", "online"]);
+    assert.deepEqual(events, ["online"]);
 });
 
 test("неудачи ниже порога не меняют статус и не порождают событий", () => {
@@ -94,7 +92,7 @@ test("неудача на пороге переводит probe в offline", () 
     const snapshot = probe.getSnapshot();
 
     assert.equal(snapshot.status, "offline");
-    assert.deepEqual(events, ["serverStatusChanged", "offline"]);
+    assert.deepEqual(events, ["offline"]);
 });
 
 test("успех после offline немедленно возвращает online", () => {
@@ -108,8 +106,7 @@ test("успех после offline немедленно возвращает on
     probe.handleResult(serverInfo(10));
 
     assert.equal(probe.getSnapshot().status, "online");
-    //Число игроков то же, что до падения, поэтому playersChanged не эмитится.
-    assert.deepEqual(events, ["serverStatusChanged", "online"]);
+    assert.deepEqual(events, ["online"]);
 });
 
 test("успех сбрасывает счётчик неудач", () => {
@@ -131,20 +128,21 @@ test("счётчик неудач не растёт выше порога", () =
 
     assert.equal(probe.getSnapshot().failedChecks, MAX_FAILED_CHECKS);
     //Переход в offline произошёл один раз, дальнейшие неудачи событий не порождают.
-    assert.deepEqual(events, ["serverStatusChanged", "offline"]);
+    assert.deepEqual(events, ["offline"]);
 });
 
-test("playersChanged эмитится только при изменении числа игроков", () => {
+test("повторный успех с другим числом игроков не порождает событий", () => {
+    //Событий у probe теперь ровно два — только переходы статуса. Изменение числа игроков
+    //наружу отдаёт ServerMonitor через viewChanged, у probe для этого события нет.
     const probe = createProbe();
     probe.handleResult(serverInfo(10));
 
     const events = recordEvents(probe);
 
-    probe.handleResult(serverInfo(10));
-    assert.deepEqual(events, [], "то же число игроков события не даёт");
-
     probe.handleResult(serverInfo(11));
-    assert.deepEqual(events, ["playersChanged"]);
+
+    assert.deepEqual(events, []);
+    assert.equal(probe.getSnapshot().info?.players, 11, "но данные обновились");
 });
 
 test("statusSince обновляется только при смене статуса", () => {

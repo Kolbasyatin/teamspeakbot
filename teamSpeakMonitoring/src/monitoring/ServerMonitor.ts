@@ -15,7 +15,19 @@ export type ServerDescriptionView = {
     maxPlayers?: number | undefined;
 };
 
-export class ServerMonitor extends EventEmitter {
+//Карта событий монитора. Словарь свой, не общий с уведомлениями: монитор не должен знать,
+//что его события кто-то куда-то доставляет. Перевод в NotificationEvent делает composition root.
+//Что проверяет компилятор: типы аргументов у emit и listener'а. Чего НЕ проверяет: неизвестное
+//имя события — типы Node в этом случае откатываются на any[], и опечатка в on(...) остаётся
+//тихим no-op. Сузить переопределением on() не выходит: сигнатура становится несовместимой
+//с базовой (TS2416). См. AGENTS.md, п. 23.
+export interface ServerMonitorEvents {
+    viewChanged: [ServerDescriptionView[]];
+    serverOnline: [ServerSnapshot];
+    serverOffline: [ServerSnapshot];
+}
+
+export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
 
     private lastViewKey?: string;
     private readonly probes = new Map<number, ServerProbe>();

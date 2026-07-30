@@ -16,13 +16,12 @@ import {
 } from "./properties.js";
 import {notifierConfig} from "./notifierConfig.js";
 import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js";
-import type {NotificationSubscription} from "./notifications/events.js";
+import {subscribe, type NotificationSubscription} from "./notifications/events.js";
 import {TeamSpeakChannelNotifier} from "./notifications/TeamSpeakChannelNotifier.js";
 import {LogNotifier} from "./notifications/LogNotifier.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TelegramSender} from "./telegram/TelegramSender.js";
-import {TelegramOnlineNotifier} from "./notifications/TelegramOnlineNotifier.js";
-import {TelegramOfflineNotifier} from "./notifications/TelegramOfflineNotifier.js";
+import {TelegramStatusNotifier} from "./notifications/TelegramStatusNotifier.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
 import {Bot} from "grammy";
@@ -70,34 +69,24 @@ async function main(): Promise<any> {
     const subscriptions: NotificationSubscription[] = [];
 
     if (notifierConfig.log) {
-        subscriptions.push({
-            event: "statusViewChanged",
-            name: "log",
-            notifier: new LogNotifier(log),
-        });
+        subscriptions.push(subscribe("statusViewChanged", "log", new LogNotifier(log)));
     }
 
     if (notifierConfig.teamspeak) {
-        subscriptions.push({
-            event: "statusViewChanged",
-            name: "teamspeak",
-            notifier: new TeamSpeakChannelNotifier(teamSpeakClient, teamSpeakChannelNames.channels),
-        });
+        subscriptions.push(subscribe(
+            "statusViewChanged",
+            "teamspeak",
+            new TeamSpeakChannelNotifier(teamSpeakClient, teamSpeakChannelNames.channels),
+        ));
     }
 
     if (notifierConfig.telegram && telegramApi) {
         const telegramSender = new TelegramSender(telegramApi, tgProperties.channelId);
+        //Один нотифаер на оба события: текст берётся из таблицы внутри него.
+        const telegramStatusNotifier = new TelegramStatusNotifier(telegramSender);
 
-        subscriptions.push({
-            event: "serverOnline",
-            name: "telegram:online",
-            notifier: new TelegramOnlineNotifier(telegramSender),
-        });
-        subscriptions.push({
-            event: "serverOffline",
-            name: "telegram:offline",
-            notifier: new TelegramOfflineNotifier(telegramSender),
-        });
+        subscriptions.push(subscribe("serverOnline", "telegram", telegramStatusNotifier));
+        subscriptions.push(subscribe("serverOffline", "telegram", telegramStatusNotifier));
     }
 
     if (notifierConfig.telegram && !telegramApi) {

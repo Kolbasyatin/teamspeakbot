@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Logger} from "pino";
+import {NotificationDispatcher} from "./NotificationDispatcher.js";
 import {
-    NotificationDispatcher,
+    subscribe,
     type NotificationEvent,
+    type NotificationEventOf,
+    type NotificationEventType,
     type Notifier,
-    type NotificationSubscription,
-} from "./NotificationDispatcher.js";
+} from "./events.js";
 
 //Эти тесты стали возможны только после итерации 2: до неё конструктор диспетчера сам создавал
 //grammy Bot и читал глобальный конфиг, поэтому изолированно он не поднимался вообще.
@@ -33,20 +35,22 @@ const serverOnline: NotificationEvent = {
     },
 };
 
-interface RecordingNotifier extends Notifier {
-    received: NotificationEvent[];
+interface RecordingNotifier<TType extends NotificationEventType> extends Notifier<TType> {
+    received: NotificationEventOf<TType>[];
 }
 
-function createNotifier(options: {failWith?: Error} = {}): RecordingNotifier {
+function createNotifier<TType extends NotificationEventType>(
+    options: {failWith?: Error} = {},
+): RecordingNotifier<TType> {
     return {
         received: [],
-        async notify(event: NotificationEvent): Promise<void> {
+        async notify(event: NotificationEventOf<TType>): Promise<void> {
             this.received.push(event);
             if (options.failWith) {
                 throw options.failWith;
             }
         },
-    } as RecordingNotifier;
+    } as RecordingNotifier<TType>;
 }
 
 function createLogger(): {logger: Logger; warnings: Array<{context: Record<string, unknown>; message: string}>} {
@@ -62,15 +66,14 @@ function createLogger(): {logger: Logger; warnings: Array<{context: Record<strin
     return {logger, warnings};
 }
 
-function subscribe(event: NotificationSubscription["event"], name: string, notifier: Notifier): NotificationSubscription {
-    return {event, name, notifier};
-}
-
 test("событие уходит только тем нотифаерам, что подписаны на его тип", async () => {
-    const onView = createNotifier();
-    const onOnline = createNotifier();
+    const onView = createNotifier<"statusViewChanged">();
+    const onOnline = createNotifier<"serverOnline">();
     const dispatcher = new NotificationDispatcher(
-        [subscribe("statusViewChanged", "view", onView), subscribe("serverOnline", "online", onOnline)],
+        [
+            subscribe("statusViewChanged", "view", onView),
+            subscribe("serverOnline", "online", onOnline),
+        ],
         createLogger().logger,
     );
 
@@ -81,10 +84,13 @@ test("событие уходит только тем нотифаерам, чт
 });
 
 test("все нотифаеры одного события вызываются", async () => {
-    const first = createNotifier();
-    const second = createNotifier();
+    const first = createNotifier<"statusViewChanged">();
+    const second = createNotifier<"statusViewChanged">();
     const dispatcher = new NotificationDispatcher(
-        [subscribe("statusViewChanged", "first", first), subscribe("statusViewChanged", "second", second)],
+        [
+            subscribe("statusViewChanged", "first", first),
+            subscribe("statusViewChanged", "second", second),
+        ],
         createLogger().logger,
     );
 
@@ -101,10 +107,13 @@ test("событие без подписчиков не приводит к ош
 });
 
 test("отказ одного нотифаера не мешает остальным", async () => {
-    const failing = createNotifier({failWith: new Error("канал недоступен")});
-    const healthy = createNotifier();
+    const failing = createNotifier<"statusViewChanged">({failWith: new Error("канал недоступен")});
+    const healthy = createNotifier<"statusViewChanged">();
     const dispatcher = new NotificationDispatcher(
-        [subscribe("statusViewChanged", "failing", failing), subscribe("statusViewChanged", "healthy", healthy)],
+        [
+            subscribe("statusViewChanged", "failing", failing),
+            subscribe("statusViewChanged", "healthy", healthy),
+        ],
         createLogger().logger,
     );
 
@@ -118,7 +127,7 @@ test("отказ нотифаера логируется с его именем 
     const {logger, warnings} = createLogger();
     const failure = new Error("канал недоступен");
     const dispatcher = new NotificationDispatcher(
-        [subscribe("serverOnline", "telegram:online", createNotifier({failWith: failure}))],
+        [subscribe("serverOnline", "telegram", createNotifier<"serverOnline">({failWith: failure}))],
         logger,
     );
 
@@ -126,16 +135,38 @@ test("отказ нотифаера логируется с его именем 
 
     assert.equal(warnings.length, 1);
     assert.equal(warnings[0]?.message, "Notification delivery failed");
-    assert.equal(warnings[0]?.context.notifier, "telegram:online");
+    assert.equal(warnings[0]?.context.notifier, "telegram");
     assert.equal(warnings[0]?.context.event, "serverOnline");
     assert.equal(warnings[0]?.context.error, failure, "в лог попадает сама ошибка, а не её индекс");
 });
 
 test("успешная доставка ничего не логирует", async () => {
     const {logger, warnings} = createLogger();
-    const dispatcher = new NotificationDispatcher([subscribe("statusViewChanged", "log", createNotifier())], logger);
+    const dispatcher = new NotificationDispatcher(
+        [subscribe("statusViewChanged", "log", createNotifier<"statusViewChanged">())],
+        logger,
+    );
 
     await dispatcher.notify(viewChanged);
 
     assert.deepEqual(warnings, []);
+});
+
+test("нотифаер получает уже суженное событие, без проверки типа внутри", async () => {
+    //Итерация 5a: notify типизирован под свой тип события, поэтому event.snapshot доступен
+    //без guard'а. Раньше каждый нотифаер начинался с if (event.type !== "...") return.
+    let receivedName: string | undefined;
+    const notifier: Notifier<"serverOnline"> = {
+        async notify(event: NotificationEventOf<"serverOnline">): Promise<void> {
+            receivedName = event.snapshot.config.name;
+        },
+    };
+    const dispatcher = new NotificationDispatcher(
+        [subscribe("serverOnline", "telegram", notifier)],
+        createLogger().logger,
+    );
+
+    await dispatcher.notify(serverOnline);
+
+    assert.equal(receivedName, "Test server");
 });

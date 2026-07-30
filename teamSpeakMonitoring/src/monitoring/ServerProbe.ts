@@ -14,13 +14,14 @@ export interface ServerSnapshot {
     statusSince: Date;
 }
 
-interface ServerStatusEvent {
-    snapshot: ServerSnapshot;
-    previousStatus: ServerStatus;
-    currentStatus: ServerStatus;
+//Карта событий: имена и типы аргументов проверяются компилятором, опечатка больше не даст
+//тихого no-op. Событий ровно два — только переходы статуса, на которые есть подписчики.
+export interface ServerProbeEvents {
+    online: [ServerSnapshot];
+    offline: [ServerSnapshot];
 }
 
-export class ServerProbe extends EventEmitter {
+export class ServerProbe extends EventEmitter<ServerProbeEvents> {
     private status: ServerStatus = 'unknown';
     private failedChecks: number = 0;
     private lastInfo: ServerQueryResult | undefined;
@@ -36,7 +37,6 @@ export class ServerProbe extends EventEmitter {
 
     public handleResult(result: ServerQueryResult | undefined): void {
         const previousStatus = this.status;
-        const previousInfo = this.lastInfo;
         //Статус сервера определяется только лишь тем, пришел ли ответ. Если да, то он точно online
         if (result) {
             this.statusSuccess(result);
@@ -44,7 +44,7 @@ export class ServerProbe extends EventEmitter {
             this.statusFailure();
         }
 
-        this.commitChanges(previousStatus, previousInfo);
+        this.commitChanges(previousStatus);
     }
 
     public getSnapshot(): ServerSnapshot {
@@ -74,18 +74,12 @@ export class ServerProbe extends EventEmitter {
         }
     }
 
-    private commitChanges(previousServerStatus: ServerStatus, previousInfo: ServerQueryResult | undefined): void {
-
-        if (this.lastInfo?.players !== previousInfo?.players) {
-            this.emit('playersChanged', this.getSnapshot());
-        }
-
-        //Status changed!
+    private commitChanges(previousServerStatus: ServerStatus): void {
         //FIXME: Тут грязновато немного. Я добавляю просто свойство времени действия текущего статуса statusSince,
         // хотя правильнее нужно вводить что то типа объекта ProbeState.
         if (this.isStatusChanged(this.status, previousServerStatus)) {
             this.statusSince = new Date();
-            this.emitStatusEvents(previousServerStatus);
+            this.emitStatusEvents();
         }
     }
 
@@ -93,24 +87,17 @@ export class ServerProbe extends EventEmitter {
         return currentStatus !== previousStatus;
     }
 
-    private emitStatusEvents(previousServerStatus: ServerStatus): void {
-        //Тут пока несрастуха. Зачем собирать сообщение чтоб потом из него забирать одно поле... еще не знаю сам.
-        const event: ServerStatusEvent = {
-            snapshot: this.getSnapshot(),
-            previousStatus: previousServerStatus,
-            currentStatus: this.status,
-        };
-
-        this.emit('serverStatusChanged', event.snapshot)
+    private emitStatusEvents(): void {
+        const snapshot = this.getSnapshot();
 
         if (this.status === 'online') {
             this.logger.debug(`${this.serverData.name} is online`)
-            this.emit('online', event.snapshot);
+            this.emit('online', snapshot);
         }
 
         if (this.status === 'offline') {
             this.logger.debug(`${this.serverData.name} is offline`)
-            this.emit('offline', event.snapshot);
+            this.emit('offline', snapshot);
         }
     }
     

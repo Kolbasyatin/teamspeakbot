@@ -1,15 +1,11 @@
-import type {NotificationEvent, Notifier} from "./events.js";
+import type {Notifier, NotificationEventOf} from "./events.js";
 import type {Logger} from "pino";
 
-export class LogNotifier implements Notifier {
+export class LogNotifier implements Notifier<"statusViewChanged"> {
     constructor(private readonly logger: Logger) {
     }
 
-    public async notify(event: NotificationEvent): Promise<void> {
-        if (event.type !== "statusViewChanged") {
-            return;
-        }
-
+    public async notify(event: NotificationEventOf<"statusViewChanged">): Promise<void> {
         this.logger.info({view: event.view}, "Событие statusViewChanged");
     }
 }

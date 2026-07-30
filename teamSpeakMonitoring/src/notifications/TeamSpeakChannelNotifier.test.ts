@@ -1,31 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {TeamSpeakChannelNotifier, type ChannelDescriptionEditor} from "./TeamSpeakChannelNotifier.js";
-import type {NotificationEvent} from "./events.js";
+import type {NotificationEventOf} from "./events.js";
 
-const viewChanged: NotificationEvent = {
+const viewChanged: NotificationEventOf<"statusViewChanged"> = {
     type: "statusViewChanged",
     view: [
         {id: 1, name: "Server one", status: "online", players: 10, maxPlayers: 64},
         {id: 2, name: "Server two", status: "offline", players: undefined, maxPlayers: undefined},
     ],
-};
-
-const serverOnline: NotificationEvent = {
-    type: "serverOnline",
-    snapshot: {
-        config: {
-            id: 1,
-            name: "Server one",
-            gameAddress: "127.0.0.1:2001",
-            query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000},
-        },
-        status: "online",
-        failedChecks: 0,
-        info: undefined,
-        lastInfo: undefined,
-        statusSince: new Date(0),
-    },
 };
 
 interface RecordingEditor extends ChannelDescriptionEditor {
@@ -71,14 +54,10 @@ test("в описание попадают имена и счёт игроков
     assert.match(description, /offline/);
 });
 
-test("события других типов игнорируются", async () => {
-    const editor = createEditor();
-    const notifier = new TeamSpeakChannelNotifier(editor, ["ServerInfo"]);
-
-    await notifier.notify(serverOnline);
-
-    assert.deepEqual(editor.calls, []);
-});
+//Тест «события других типов игнорируются» удалён: нотифаер типизирован под statusViewChanged,
+//чужое событие в него теперь не передать — это ошибка компиляции, а не поведение в рантайме.
+//Проверять рантайм-тестом нечего, а @ts-expect-error здесь был бы бесполезен: тесты не входят
+//в tsc (см. AGENTS.md, п. 22 долга).
 
 test("отказ одного канала не мешает попытке обновить остальные, но виден снаружи", async () => {
     //Итерация 2: раньше здесь был allSettled, и отказ правки канала пропадал бесследно.

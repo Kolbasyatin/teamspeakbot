@@ -1,4 +1,4 @@
-import type {NotificationEvent, Notifier} from "./events.js";
+import type {Notifier, NotificationEventOf} from "./events.js";
 import {ChannelDescriptionRenderer} from "../teamspeak/ChannelDescriptionRenderer.js";
 
 //Нотифаеру нужна одна операция, про соединение и библиотеку TeamSpeak он не знает.
@@ -6,7 +6,7 @@ export interface ChannelDescriptionEditor {
     editChannelDescription(channelName: string, description: string): Promise<void>;
 }
 
-export class TeamSpeakChannelNotifier implements Notifier {
+export class TeamSpeakChannelNotifier implements Notifier<"statusViewChanged"> {
 
     constructor(
         private readonly channelEditor: ChannelDescriptionEditor,
@@ -14,14 +14,8 @@ export class TeamSpeakChannelNotifier implements Notifier {
     ) {
     }
 
-    public async notify(event: NotificationEvent): Promise<void> {
-        //Проверка типа нужна, пока NotificationEvent — один union на всех: без неё не сузить тип
-        //до statusViewChanged. Уйдёт в итерации 5 вместе с типизацией событий по каналам.
-        if (event.type !== "statusViewChanged") {
-            return;
-        }
-
-        //TODO: рендерер вынести в конструктор — итерация 5, вместе с политикой уведомлений.
+    public async notify(event: NotificationEventOf<"statusViewChanged">): Promise<void> {
+        //TODO: рендерер вынести в конструктор, когда у уведомлений появится своя политика.
         const description = ChannelDescriptionRenderer.render(event.view);
 
         //map запускает правку всех каналов сразу, поэтому Promise.all не мешает остальным каналам

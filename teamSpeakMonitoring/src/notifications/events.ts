@@ -12,15 +12,40 @@ export type NotificationEvent =
 
 export type NotificationEventType = NotificationEvent["type"];
 
-//Канал доставки. Ресурсами (соединения, боты) владеет composition root, поэтому close() здесь нет.
-export interface Notifier {
+//Событие одного конкретного типа: NotificationEventOf<"serverOnline"> — это вариант со snapshot.
+export type NotificationEventOf<TType extends NotificationEventType> =
+    Extract<NotificationEvent, { type: TType }>;
+
+//Канал доставки. Параметризован типом события, поэтому notify получает уже суженный тип
+//и проверять event.type внутри не нужно.
+//Ресурсами (соединения, боты) владеет composition root, поэтому close() здесь нет.
+export interface Notifier<TType extends NotificationEventType> {
+    notify(event: NotificationEventOf<TType>): Promise<void>;
+}
+
+//Подписка со стёртым типом события: диспетчеру нужен однородный список, а типы у нотифаеров разные.
+export interface NotificationSubscription {
+    event: NotificationEventType;
+    //Имя канала доставки — нужно только логам, никакой логики на него не завязано и не парсится.
+    //До его появления отказ логировался как handlerIndex: 2, то есть индексом в массиве.
+    //Тип события в имени не дублируем: он и так пишется в лог отдельным полем.
+    name: string;
     notify(event: NotificationEvent): Promise<void>;
 }
 
-//Что на какое событие подписано. Список собирается в main.ts: там видно всю систему целиком.
-//name нужен только логам — без него непонятно, какой именно канал отказал.
-export interface NotificationSubscription {
-    event: NotificationEventType;
-    name: string;
-    notifier: Notifier;
+//Единственное место в проекте, где тип события приводится. Приведение безопасно по построению:
+//диспетчер вызывает notify только для события того типа, который указан в этой же подписке.
+//Взамен несовпадение типа события и нотифаера становится ошибкой компиляции:
+//subscribe("serverOnline", "log", new LogNotifier(log)) не соберётся.
+export function subscribe<TType extends NotificationEventType>(
+    event: TType,
+    name: string,
+    notifier: Notifier<TType>,
+): NotificationSubscription {
+    return {
+        event,
+        name,
+        notify: (received: NotificationEvent): Promise<void> =>
+            notifier.notify(received as NotificationEventOf<TType>),
+    };
 }
