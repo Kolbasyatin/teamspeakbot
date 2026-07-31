@@ -14,8 +14,7 @@ export async function migrateTestDatabase(pool: Pool): Promise<void> {
                 check (json_valid(\`query_config\`)),
             enabled      tinyint(1) default 1                   not null,
             created_at   timestamp  default current_timestamp() not null,
-            updated_at   timestamp  default current_timestamp() not null on update current_timestamp(),
-            PRIMARY KEY (id)
+            updated_at   timestamp  default current_timestamp() not null on update current_timestamp()
         )
     `);
 }

@@ -1,0 +1,112 @@
+# Прод. Собран по образцу того compose, который уже работает: имя проекта, имена контейнеров,
+# имена томов и порты сохранены ОДИН В ОДИН — иначе docker создаст новые тома и прод потеряет данные.
+#
+# Запуск:
+#   docker compose --env-file env/secrets.env -f compose.prod.yaml up -d
+#
+# Чувствительные данные в репозиторий не попадают. На прод-машине нужны два файла (шаблоны рядом):
+#   env/secrets.env  — пароли для подстановки в этот compose (${...})
+#   env/tsbot.env    — конфигурация приложения, монтируется внутрь как .env.local
+name: teamspeak6
+
+services:
+  teamspeak:
+    image: teamspeaksystems/teamspeak6-server:latest
+    container_name: teamspeak6-server
+    restart: unless-stopped
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+    ports:
+      - "9987:9987/udp"     # голос
+      - "30033:30033/tcp"   # передача файлов
+      - "10022:10022/tcp"   # ServerQuery over SSH
+      - "10080:10080/tcp"   # WebQuery / HTTP API
+
+    environment:
+      TSSERVER_LICENSE_ACCEPTED: accept
+
+      TSSERVER_DEFAULT_PORT: 9987
+      TSSERVER_VOICE_IP: 0.0.0.0
+
+      TSSERVER_FILE_TRANSFER_PORT: 30033
+      TSSERVER_FILE_TRANSFER_IP: 0.0.0.0
+
+      TSSERVER_QUERY_SSH_ENABLED: "true"
+      TSSERVER_QUERY_SSH_PORT: 10022
+      TSSERVER_QUERY_HTTP_ENABLED: "true"
+      TSSERVER_QUERY_HTTP_PORT: 10080
+
+      # Задан явно, чтобы не искать сгенерированный пароль в логах.
+      TSSERVER_QUERY_ADMIN_PASSWORD: "${TS_QUERY_ADMIN_PASSWORD}"
+
+      TSSERVER_DATABASE_PLUGIN: mariadb
+      TSSERVER_DATABASE_SQL_CREATE_PATH: create_mariadb
+      TSSERVER_DATABASE_HOST: mariadb
+      TSSERVER_DATABASE_PORT: 3306
+      TSSERVER_DATABASE_NAME: teamspeak
+      TSSERVER_DATABASE_USERNAME: teamspeak
+      TSSERVER_DATABASE_PASSWORD: "${TS_DB_PASSWORD}"
+
+    volumes:
+      - teamspeak-data:/var/tsserver
+
+  mariadb:
+    image: mariadb:11.4
+    container_name: teamspeak6-mariadb
+    restart: unless-stopped
+
+    environment:
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
+      MARIADB_DATABASE: teamspeak
+      MARIADB_USER: teamspeak
+      MARIADB_PASSWORD: "${TS_DB_PASSWORD}"
+
+    ports:
+      - "13306:3306"
+
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      # Провижининг баз tsbot/tsbot_test. На уже работающем проде не сработает и не нужен:
+      # entrypoint выполняет эти скрипты только при ПЕРВОЙ инициализации тома, а база tsbot
+      # там создана руками. Нужен для развёртывания с нуля.
+      - ./mariadb/init:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ts-monitoring:
+    image: ghcr.io/kolbasyatin/teamspeakbot/tsbot-monitor:latest
+    container_name: teamspeak6-monitoring
+    restart: unless-stopped
+
+    depends_on:
+      # Добавлено к исходному варианту: раньше зависимость была только от teamspeak, поэтому
+      # приложение могло начать работу раньше готовности БД. Падения из-за этого не было — на первом
+      # чтении серверов стоит retry (~90 с, итерация 0), — но ждать готовности честнее, чем ретраить.
+      mariadb:
+        condition: service_healthy
+      teamspeak:
+        condition: service_started
+
+    volumes:
+      # dotenv-flow подхватывает .env.local; сам образ конфигов не содержит.
+      - ./env/tsbot.env:/app/.env.local:ro
+
+    # TODO (итерация 6b): здесь появится одноразовый сервис `migrate` с той же image и командой
+    # `node dist/migrate.js`, а ts-monitoring получит
+    #   depends_on: {migrate: {condition: service_completed_successfully}}
+    # Пока мигратора нет, схема применяется руками.
+
+volumes:
+  teamspeak-data:
+    name: teamspeak6-data
+
+  mariadb-data:
+    name: teamspeak6-mariadb-data

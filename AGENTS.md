@@ -24,9 +24,13 @@
 ## 2. Структура репозитория
 
 ```
-.docker/                     dev-контейнер (ТОЛЬКО локальная разработка)
-  Dockerfile                 node:22-trixie + git, USER node, CMD bash
-  docker-compose.yaml        монтирует ../teamSpeakMonitoring в /workspace
+.docker/                     окружения целиком: дев и прод. См. .docker/README.md
+  compose.dev.yaml           дев: MariaDB, под профилями teamspeak и app; своё имя проекта и тома
+  compose.prod.yaml          прод: TeamSpeak 6 + MariaDB + tsbot-monitor из GHCR
+  mariadb/init/01-databases.sql  провижининг баз tsbot и tsbot_test (не миграция схемы)
+  env/*.env.example          шаблоны конфигов; настоящие *.env гитигнорятся
+  Dockerfile                 node:22-trixie + git — образ для дев-сервиса app
+  docker-compose.yaml        прежний одинокий dev-контейнер с node (оставлен как был)
 .github/workflows/
   docker-build.yml           workflow_dispatch → build & push ghcr.io/<repo>/tsbot-monitor
 sinusbot.http                ручные HTTP-запросы (SinusBot API, admin endpoints, Telegram, armahq)
@@ -83,7 +87,9 @@ teamSpeakMonitoring/         сам сервис
       TelegramBot.ts         grammy long-polling, команды бота
       TelegramSender.ts      отправка текста в чат
     persistence/           ← адаптер БД
-      ServerRepository.ts    findAllEnabled(): читает monitored_servers, парсит query_config JSON
+      ServerRepository.ts    findAllEnabled(): читает monitored_servers, маппит строки
+      parseQueryConfig.ts    чистая функция разбора query_config (вся содержательная логика
+                             persistence); проверяется в test:unit, без БД
       ServerRepository.test.ts  интеграционный тест по живой MariaDB
     admin/AdminServer.ts   ← адаптер HTTP: node:http, POST-роуты → события
 
@@ -253,8 +259,17 @@ CREATE TABLE IF NOT EXISTS monitored_servers
 );
 ```
 
-`query_config` — сериализованный `ServerQueryConfig`, **включая поле `type`**; `ServerRepository`
+`query_config` — сериализованный `ServerQueryConfig`, **включая поле `type`**; `parseQueryConfig`
 проверяет, что оно совпадает с `query_type`, иначе бросает ошибку.
+
+> **Живое доказательство, зачем нужен мигратор (найдено 2026-07-31).** Схема описана в двух местах,
+> и вторая копия — в `src/test/databaseTestUtils.ts` — успела **разъехаться и сломаться**: там
+> `primary key` был объявлен дважды (в колонке и отдельной строкой `PRIMARY KEY (id)`), а MariaDB
+> отвергает это ошибкой `ER_MULTIPLE_PRI_KEY`. Дефект не проявлялся, потому что `CREATE TABLE
+> IF NOT EXISTS` на уже существующей таблице ничего не делает: на локальной базе, где таблица была
+> создана из `00_migration.sql`, тест проходил. На **чистой** базе интеграционный тест не работал
+> никогда. Обнаружено при первом запуске тестов против свежего дев-окружения; лишняя строка убрана,
+> но настоящая починка — один исполняемый источник схемы (итерация 6).
 
 ```sql
 INSERT INTO monitored_servers (name, game_address, query_type, query_config, enabled)
@@ -278,17 +293,32 @@ curl -X POST http://localhost:3000/internal/force-reload-servers  # измени
 
 ### Локальная разработка
 
-Два варианта — на хосте или в dev-контейнере из `.docker/`. Контейнер нужен, чтобы не зависеть от
-локальной версии Node (образ `node:22-trixie`, рабочая директория `/workspace` смонтирована
-на `teamSpeakMonitoring`, `CMD bash` — интерактивная оболочка, а не запуск сервиса):
+Окружение целиком описано в `.docker/` — там же и прод. Подробности и команды: `.docker/README.md`.
 
 ```bash
-docker compose -f .docker/docker-compose.yaml run --rm node bash
-# внутри: npm install && npm run dev
+cd .docker
+docker compose -f compose.dev.yaml up -d     # MariaDB с базами teamspeak, tsbot, tsbot_test
 ```
 
-`.docker/` **не используется для прода**. MariaDB и TeamSpeak в этот compose не входят — их нужно иметь
-снаружи.
+Дальше приложение и тесты запускаются **на хосте** — закоммиченные `.env` и `.env.test` указывают
+на `localhost:3306`, а пароли в дев-compose специально совпадают с ними, поэтому настраивать нечего.
+Остальное под профилями: `--profile teamspeak` (TeamSpeak 6 на 10022, ServerQuery-пароль `devquery`)
+и `--profile app` (приложение в контейнере).
+
+Прод и дев изолированы по построению: разные имена проектов (`teamspeak6` против `tsbot-dev`)
+и разные имена томов — дев физически не может подключиться к прод-данным.
+
+Базы `tsbot` и `tsbot_test` создаёт `.docker/mariadb/init/01-databases.sql` — это **провижининг**,
+а не миграция схемы: мигратор подключается к уже существующей базе и создать её сам не может.
+Скрипты выполняются только при первой инициализации тома.
+
+> Дев-сеть объявлена с явной подсетью `172.28.0.0/24`. Причина: при поднятом full-tunnel VPN его
+> маршруты накрывают весь диапазон Docker'а, и `docker compose up` падает с
+> `all predefined address pools have been fully subnetted`. С явной подсетью аллокатор пула
+> не участвует, и окружение поднимается при любом состоянии VPN.
+
+`.docker/docker-compose.yaml` (одинокий dev-контейнер с node на случай, когда нужен Node той же
+версии, что в прод-образе) оставлен как был — в дев-compose его аналога нет.
 
 ### Команды (из `teamSpeakMonitoring/`)
 
@@ -297,8 +327,10 @@ npm install
 npm run dev        # tsx watch src/main.ts
 npm run build      # tsc -p tsconfig.json → dist/
 npm start          # node dist/main.js
-npm test           # NODE_ENV=test, node:test через tsx
-npm run test:repo  # только src/repositories/*.test.ts
+npm run typecheck  # tsc по прод-конфигу и по tsconfig.test.json (тесты тоже под проверкой)
+npm run test:unit  # логика без БД; сначала автоматически гоняет typecheck
+npm test           # всё, включая интеграционный тест по живой MariaDB
+npm run test:repo  # только src/persistence/*.test.ts
 ```
 
 ### Prod
@@ -307,8 +339,12 @@ npm run test:repo  # только src/repositories/*.test.ts
   + `dist/`), `USER node`, `NODE_ENV=production`, `CMD node dist/main.js`.
 - Сборка образа — GitHub Actions `docker-build.yml`, запуск **только вручную** (`workflow_dispatch`,
   input `service=monitor`). Публикует `ghcr.io/<repo>/tsbot-monitor:latest` и `:sha-<sha>`.
-- На сервере лежит отдельный (пока не в этом репозитории) `docker-compose`, который поднимает MariaDB,
-  TeamSpeak 6 server и `tsbot-monitor` из GHCR-образа. Prod-compose планируется добавить в репозиторий.
+- Prod-compose лежит в репозитории: `.docker/compose.prod.yaml` — TeamSpeak 6, MariaDB и
+  `tsbot-monitor` из GHCR. Имя проекта, имена контейнеров, томов и порты сохранены один в один
+  с тем вариантом, который уже работает на сервере, иначе docker создал бы новые тома и прод потерял
+  бы данные. Чувствительных данных в репозитории нет: нужны `env/secrets.env` (пароли для подстановки)
+  и `env/tsbot.env` (конфигурация приложения, монтируется как `/app/.env.local`) — оба гитигнорятся,
+  шаблоны рядом. Запуск: `docker compose --env-file env/secrets.env -f compose.prod.yaml up -d`.
 - CI не собирает и не тестирует код на push/PR — только собирает образ по кнопке.
 
 ## 8. Известный технический долг
@@ -337,8 +373,13 @@ npm run test:repo  # только src/repositories/*.test.ts
    в уведомлениях: контракт (`NotificationEvent`, `Notifier`, `NotificationSubscription`)
    вынесен из `NotificationDispatcher.ts` в `notifications/events.ts`, и нотифаеры больше
    не импортируют файл, названный по диспетчеру.
-5. `queriers/*` делают непроверенный `config as A2sQueryConfig` / `as RestQueryConfig`. Работает только
-   потому, что `ServerMonitor` выбирает querier по `type`. Стоит дискриминировать явно.
+5. 📌 **Зафиксирован тестом в 6a, не закрыт.** `queriers/*` делают непроверенный
+   `config as A2sQueryConfig` / `as RestQueryConfig`. Дефект начинается раньше — в `parseQueryConfig`:
+   там сверяется только `type`, а форма конфига не проверяется, поэтому `{"type":"a2s"}` без `host`
+   и `port` спокойно доезжает до querier'а и падает уже в опросе. Теперь это поведение закреплено
+   тестом («поля внутри конфига не проверяются»), так что починка сразу покажет, что изменилось.
+   Каст в querier'ах работает только потому, что `ServerMonitor` выбирает querier по `type`.
+   Стоит дискриминировать явно.
 6. ✅ **Закрыто, итерация 4.** Папка `a2s/` содержала `ServerMonitor`, `ProbeScheduler`, `config`
    и `ChannelDescriptionRenderer` — ничего из этого к протоколу A2S не относится. Раскладка переделана:
    домен в `monitoring/` и `notifications/`, адаптеры в `queriers/`, `teamspeak/`, `telegram/`,
@@ -383,9 +424,12 @@ npm run test:repo  # только src/repositories/*.test.ts
     и любое исключение навсегда убивало перепланирование задачи — сервер молча выпадал
     из мониторинга. Теперь исключение логируется, перепланирование идёт по любому пути,
     `getNextDelayMs()` тоже под защитой с fallback-задержкой. Зафиксировано тестами.
-11. `AdminServer` поддерживает bearer-токен, но `main.ts` передаёт только `port` — эндпоинты открыты
-   без авторизации на `0.0.0.0:3000`. Токен нужно завести в convict и прокинуть, либо явно не публиковать
-   порт наружу.
+11. 🔽 **Понижен в приоритете 2026-07-31 (решение zalex).** `AdminServer` поддерживает bearer-токен,
+   но `main.ts` передаёт только `port`, поэтому эндпоинты открыты без авторизации на `0.0.0.0:3000`.
+   Обоснование отсрочки: в prod порт опубликован только на localhost, а сами эндпоинты безобидны —
+   они лишь перечитывают список серверов из БД, ничего не удаляют и данных не выдают. **Планируется
+   вообще убрать эту поверхность:** управление серверами переедет в Telegram-бота, и тогда
+   HTTP-эндпоинты либо исчезнут, либо станут внутренними. Токен раньше этого делать незачем.
 12. 🟡 **Частично, итерация 5b.** `emitChangedIfNeeded()` вызывается после каждого poll каждого probe:
     при N серверах вид пересчитывается и сериализуется N раз за цикл. Сравнение — через
     `JSON.stringify`. Сама лишняя работа осталась; закрыто её **последствие** — обновления TeamSpeak
@@ -396,7 +440,15 @@ npm run test:repo  # только src/repositories/*.test.ts
     У probe осталось ровно два события — переходы статуса. Изменение числа игроков наружу отдаёт
     `ServerMonitor` через `viewChanged`.
 14. `forceSync` пересоздаёт probes, теряя `status`/`statusSince`/`failedChecks` — после него все серверы
-    заново проходят `unknown → online` и Telegram получит повторные «is online».
+    заново проходят `unknown → online`.
+
+    **Симптом в Telegram, похоже, исчез сам после 8b — но тестом это не закреплено.** Память
+    `ChangesOnlyNotifier` живёт в нотифаере, а не в probe, поэтому `forceSync` её не сбрасывает:
+    повторный переход `unknown → online` даст событие, но обёртка увидит, что `serverOnline`
+    по этому серверу уже доставлен, и промолчит. Повторные «is online» остаются только при
+    **рестарте процесса**. Сама потеря `statusSince` не лечится: `/time` после `forceSync`
+    покажет время с момента пересоздания probe, а не с момента реальной смены статуса.
+    Проверить это тестом — отдельный маленький шаг.
 15. `ServerProbe` конструктор: обязательный `logger` идёт после параметров с дефолтами.
 16. `ChannelDescriptionRenderer` форматирует время жёстко в `Europe/Moscow` и вызывает `new Date()` внутри — это
     делает вид недетерминированным и нетестируемым.
@@ -435,11 +487,15 @@ npm run test:repo  # только src/repositories/*.test.ts
     `on()` не выходит — сигнатура становится несовместимой с базовой (TS2416, проверено).
     Рабочий вариант, если понадобится: не наследовать `EventEmitter`, а обернуть его в типизированный
     фасад. Пока не делаем: ошибки в типах аргументов ловятся, а имён событий в проекте шесть.
-22. Тесты исключены из `tsc` (`exclude` в `tsconfig.json`), поэтому **не проходят проверку типов**.
-    Рефакторинг может сломать тест молча — обнаружится только на прогоне. Так и случилось в итерации
-    4a: после добавления обязательного `Logger` в конструктор querier'а вызов `new RestQuerier()`
-    в тесте остался без аргумента, и `tsc` этого не увидел. Лечится отдельным `tsconfig.test.json`,
-    включающим тесты, и прогоном `tsc` по нему в проверках.
+22. ✅ **Закрыто, итерация 9.** Тесты были исключены из `tsc` (`exclude` в `tsconfig.json`), поэтому
+    **не проходили проверку типов**, и правка контракта ломала тест молча — обнаруживалось только
+    на прогоне. Так вышло дважды: в итерации 4a (`new RestQuerier()` остался без обязательного
+    `Logger`) и в 8b (в фикстуре не появился `getSnapshot` из `CurrentStateSource` — пять упавших
+    тестов). Добавлен `tsconfig.test.json` (наследует основной, ничего не исключает, только проверка
+    без эмита) и `npm run typecheck`, повешенный на `pretest:unit`. Сборка по-прежнему идёт через
+    `tsconfig.json`, поэтому в `dist` тестов нет. Отдельного внимания стоит следствие: гарантии
+    уровня типов теперь можно закреплять тестом — до этого `@ts-expect-error` в тесте не проверялся
+    ничем (в 5a пришлось удалить такой тест как театральный).
 18. ✅ **Закрыто, итерация 1.** `src/test/databaseTestUtils.ts` импортировал `ServerQueryConfig`
     без `type` и без расширения `.js` — под NodeNext/`verbatimModuleSyntax` невалидно, но не ловилось,
     т.к. тесты исключены из `tsc`. Там же закрыто: `npm test` находил 0 тестов и рапортовал успех
@@ -488,6 +544,19 @@ npm run test:repo  # только src/repositories/*.test.ts
   по своему правилу, реализуют тот же `Notifier<TType>` и потому прозрачны для диспетчера, а какой
   канал каким правилом обёрнут — видно в `main.ts`. Именно поэтому одно и то же решение может быть
   для одного канала верным, а для другого запрещённым: TeamSpeak — табло, Telegram — журнал.
+- **Ключи `ChangesOnlyNotifier`: в `stateOf` попадает всё, от чего зависит текст.** Сейчас передано
+  `event => event.type`, и это верно, потому что текст в `TelegramStatusNotifier` — ровно
+  `${name} is online`, то есть двух разных «online»-сообщений по одному серверу не существует.
+  Как только в сообщение попадут данные (число игроков, карта, текст от модели), такой ключ начнёт
+  **глушить настоящие обновления**: состояние «то же», а сказать есть что. Тогда `stateOf` должен
+  включать эти данные (`${event.type}:${players}`). Правится одной лямбдой в `main.ts` — там же,
+  где видно, из чего собирается текст. В `subjectOf`, наоборот, состояние попадать **не должно**:
+  иначе `Map` вырождается в `Set` и повторный подъём сервера после падения теряется.
+- **Две конфигурации TypeScript.** `tsconfig.json` — сборка (`npm run build`), исключает тесты, чтобы
+  они не попадали в `dist`. `tsconfig.test.json` — только проверка типов, наследует основной и
+  **ничего не исключает**. Обе гоняет `npm run typecheck`, и он же висит на `pretest:unit`, поэтому
+  прогон тестов начинается с проверки типов и на ошибке до тестов не доходит. Правя контракт,
+  которым пользуются тесты, ошибку видно в компиляции, а не в виде рантайм-каскада.
 - Event-driven связка через `node:events`; обработчики, передаваемые в `on`/`off`, объявляются как
   `private readonly handler = (…) => {}` (иначе `off` не снимет подписку).
 - Комментарии в коде — на русском, короткие, объясняют «почему», а не «что». `FIXME`/`TODO` в коде

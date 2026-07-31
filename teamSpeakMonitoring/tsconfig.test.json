@@ -1,0 +1,19 @@
+// Проверка типов для тестов. Основной tsconfig.json исключает *.test.ts и src/test/**, чтобы они
+// не попадали в dist при сборке — но вместе с этим они выпадали и из проверки типов. Из-за этого
+// правка контракта не была видна tsc и всплывала только на прогоне: так вышло в итерации 4a
+// (new RestQuerier() без обязательного Logger) и в 8b (getSnapshot в CurrentStateSource).
+//
+// Здесь тот же набор строгих опций, но ничего не эмитим и ничего не исключаем.
+// Сборка по-прежнему идёт через tsconfig.json, поэтому dist остаётся без тестов.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Не нужны без эмита, а declarationMap без declaration — ошибка конфигурации.
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": []
+}

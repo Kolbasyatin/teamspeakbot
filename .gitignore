@@ -8,3 +8,7 @@ teamSpeakMonitoring/dist
 teamSpeakMonitoring/node_modules
 /http-client.private.env.json
 .claude
+xray
+
+# Настоящие env-файлы окружений: в репозитории только *.example
+.docker/env/*.env

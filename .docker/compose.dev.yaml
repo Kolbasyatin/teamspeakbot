@@ -1,0 +1,133 @@
+# Рантайм для разработки. Запускать из этой папки: docker compose -f compose.dev.yaml up -d
+#
+# Имя проекта и имена томов НАМЕРЕННО отличаются от прода (там `teamspeak6`): дев-окружение
+# не должно иметь физической возможности подключиться к прод-томам или затереть их.
+#
+# По умолчанию поднимается ТОЛЬКО MariaDB — этого достаточно, чтобы на хосте работали
+# `npm run dev` и `npm test` с закоммиченным .env (localhost:3306). Всё остальное — под профилями:
+#   --profile teamspeak   поднять TeamSpeak 6 (нужен, только когда проверяешь запись в описание канала)
+#   --profile app         запустить само приложение в контейнере (обычно не нужно: удобнее на хосте)
+name: tsbot-dev
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: tsbot-dev-mariadb
+    restart: unless-stopped
+
+    environment:
+      # Дев-значения, не секреты: ровно те, что стоят в закоммиченном .env, чтобы приложение
+      # и тесты на хосте работали без правки конфигов.
+      MARIADB_ROOT_PASSWORD: devroot
+      MARIADB_DATABASE: teamspeak
+      MARIADB_USER: teamspeak
+      MARIADB_PASSWORD: mypassword
+
+    ports:
+      # 3306 наружу — потому что .env и .env.test в репозитории указывают на localhost:3306.
+      # Прод публикует 13306, поэтому конфликта с ним нет даже на одной машине.
+      - "3306:3306"
+
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      # Провижининг баз tsbot и tsbot_test. Выполняется только при первой инициализации тома:
+      # если базы не появились — снести том (docker volume rm tsbot-dev-mariadb-data).
+      - ./mariadb/init:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  teamspeak:
+    image: teamspeaksystems/teamspeak6-server:latest
+    container_name: tsbot-dev-teamspeak
+    profiles: ["teamspeak"]
+    restart: unless-stopped
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+    ports:
+      - "9987:9987/udp"     # голос
+      - "30033:30033/tcp"   # передача файлов
+      - "10022:10022/tcp"   # ServerQuery over SSH — этим ходит приложение
+      - "10080:10080/tcp"   # WebQuery / HTTP API
+
+    environment:
+      TSSERVER_LICENSE_ACCEPTED: accept
+
+      TSSERVER_DEFAULT_PORT: 9987
+      TSSERVER_VOICE_IP: 0.0.0.0
+
+      TSSERVER_FILE_TRANSFER_PORT: 30033
+      TSSERVER_FILE_TRANSFER_IP: 0.0.0.0
+
+      TSSERVER_QUERY_SSH_ENABLED: "true"
+      TSSERVER_QUERY_SSH_PORT: 10022
+      TSSERVER_QUERY_HTTP_ENABLED: "true"
+      TSSERVER_QUERY_HTTP_PORT: 10080
+
+      # Дев-пароль задан явно, чтобы не выуживать сгенерированный из логов.
+      # В .env приложения (TS_PASSWORD) должно стоять то же значение.
+      TSSERVER_QUERY_ADMIN_PASSWORD: devquery
+
+      TSSERVER_DATABASE_PLUGIN: mariadb
+      TSSERVER_DATABASE_SQL_CREATE_PATH: create_mariadb
+      TSSERVER_DATABASE_HOST: mariadb
+      TSSERVER_DATABASE_PORT: 3306
+      TSSERVER_DATABASE_NAME: teamspeak
+      TSSERVER_DATABASE_USERNAME: teamspeak
+      TSSERVER_DATABASE_PASSWORD: mypassword
+
+    volumes:
+      - teamspeak-data:/var/tsserver
+
+  app:
+    profiles: ["app"]
+    build:
+      context: ..
+      dockerfile: .docker/Dockerfile
+    container_name: tsbot-dev-app
+    working_dir: /workspace
+    command: ["npm", "run", "dev"]
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+    # Секреты сюда не попадают: файл гитигнорится, шаблон рядом (env/monitor.env.example).
+    env_file:
+      - ./env/monitor.env
+
+    environment:
+      # Внутри сети compose база и TeamSpeak — по именам сервисов, а не по localhost.
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      TS_HOST: teamspeak
+      TS_PORT: 10022
+
+    volumes:
+      - ../teamSpeakMonitoring:/workspace
+
+networks:
+  default:
+    name: tsbot-dev
+    ipam:
+      config:
+        # Подсеть задана явно осознанно. При поднятом full-tunnel VPN (tun2 с маршрутами
+        # 8.0.0.0/5, 16.0.0.0/4, 128.0.0.0/1 и т.д.) Docker считает весь свой пул занятым
+        # и отказывается создавать сеть: "all predefined address pools have been fully subnetted".
+        # С явной подсетью аллокатор пула не участвует, и окружение поднимается при любом
+        # состоянии VPN. Диапазон выбран свободным: 172.17–172.20 заняты другими проектами.
+        - subnet: 172.28.0.0/24
+
+volumes:
+  mariadb-data:
+    name: tsbot-dev-mariadb-data
+
+  teamspeak-data:
+    name: tsbot-dev-teamspeak-data
