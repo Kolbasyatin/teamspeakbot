@@ -12,6 +12,7 @@ import {
     syncConfig,
     tgProperties,
     monitorProperties,
+    stateSyncProperties,
     teamSpeakChannelNames,
 } from "./properties.js";
 import {notifierConfig} from "./notifierConfig.js";
@@ -19,6 +20,8 @@ import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js"
 import {subscribe, type NotificationSubscription} from "./notifications/events.js";
 import {TeamSpeakChannelNotifier} from "./notifications/TeamSpeakChannelNotifier.js";
 import {LatestOnlyNotifier} from "./notifications/LatestOnlyNotifier.js";
+import {StateSync} from "./notifications/StateSync.js";
+import {type ScheduledTask, Scheduler} from "./monitoring/Scheduler.js";
 import {LogNotifier} from "./notifications/LogNotifier.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TelegramSender} from "./telegram/TelegramSender.js";
@@ -77,14 +80,17 @@ async function main(): Promise<any> {
         //Описание канала — табло текущего состояния, а не журнал: пока идёт запись, промежуточные
         //обновления не нужны. Без обёртки они копятся очередью на единственном SSH-соединении.
         //Telegram оборачивать нельзя — там каждое событие самостоятельный факт.
-        subscriptions.push(subscribe(
-            "statusViewChanged",
-            "teamspeak",
-            new LatestOnlyNotifier(
-                new TeamSpeakChannelNotifier(teamSpeakClient, teamSpeakChannelNames.channels),
-                log,
-            ),
-        ));
+        //Один экземпляр на оба события: обёртка должна склеивать их вместе, иначе периодическая
+        //синхронизация и реальное изменение получат по своей очереди доставки.
+        const teamSpeakNotifier = new LatestOnlyNotifier(
+            new TeamSpeakChannelNotifier(teamSpeakClient, teamSpeakChannelNames.channels),
+            log,
+        );
+
+        subscriptions.push(subscribe("statusViewChanged", "teamspeak", teamSpeakNotifier));
+        //Табло состояния перезаписывается и когда ничего не изменилось: так лечится упавшая
+        //доставка и откатывается правка описания, сделанная в TeamSpeak руками.
+        subscriptions.push(subscribe("statusViewRefreshed", "teamspeak", teamSpeakNotifier));
     }
 
     if (notifierConfig.telegram && telegramApi) {
@@ -101,6 +107,17 @@ async function main(): Promise<any> {
     }
 
     const dispatcher = new NotificationDispatcher(subscriptions, log);
+
+    //Периодическая публикация текущего состояния. Часы держит Scheduler, а не монитор и не нотифаер:
+    //у него уже есть пер-задачные таймеры, изоляция исключений и start/stop, а монитор остаётся
+    //без зависимости от времени и детерминированным для тестов.
+    const stateSync = new StateSync(monitor, dispatcher);
+    const stateSyncScheduler = new Scheduler<ScheduledTask>(log);
+    stateSyncScheduler.sync([{
+        id: "stateSync",
+        run: (): Promise<void> => stateSync.publishCurrentState(),
+        getNextDelayMs: (): number => stateSyncProperties.intervalMs,
+    }]);
 
     monitor.on("viewChanged", view => {
         void dispatcher.notify({
@@ -150,6 +167,7 @@ async function main(): Promise<any> {
     const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
         console.log(signal)
         monitor.stop();
+        stateSyncScheduler.stop();
         if (telegramBot) {
             await telegramBot.stop();
         }
@@ -183,6 +201,10 @@ async function main(): Promise<any> {
     });
     void await adminWebServer.start();
     void monitor.start();
+    //Первый тик уходит сразу (Scheduler планирует задачи с нулевой задержкой): описание канала
+    //приводится в соответствие с реальностью не дожидаясь первого изменения состояния. Цена —
+    //сразу после рестарта в описании на один интервал опроса появятся статусы unknown.
+    stateSyncScheduler.start();
     telegramBot?.start();
 }
 

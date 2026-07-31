@@ -6,7 +6,12 @@ export interface ChannelDescriptionEditor {
     editChannelDescription(channelName: string, description: string): Promise<void>;
 }
 
-export class TeamSpeakChannelNotifier implements Notifier<"statusViewChanged"> {
+//Подписан на оба события с видом: описание канала — табло текущего состояния, и ему одинаково
+//нужны и «состояние изменилось», и «состояние переопубликовано» (периодическая синхронизация).
+//Различать их внутри нечего: работа одна — отрендерить и записать.
+type ViewEvent = "statusViewChanged" | "statusViewRefreshed";
+
+export class TeamSpeakChannelNotifier implements Notifier<ViewEvent> {
 
     constructor(
         private readonly channelEditor: ChannelDescriptionEditor,
@@ -14,7 +19,7 @@ export class TeamSpeakChannelNotifier implements Notifier<"statusViewChanged"> {
     ) {
     }
 
-    public async notify(event: NotificationEventOf<"statusViewChanged">): Promise<void> {
+    public async notify(event: NotificationEventOf<ViewEvent>): Promise<void> {
         //TODO: рендерер вынести в конструктор, когда у уведомлений появится своя политика.
         const description = ChannelDescriptionRenderer.render(event.view);
 

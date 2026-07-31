@@ -5,8 +5,14 @@ import type {ServerSnapshot} from "../monitoring/ServerProbe.js";
 //Лежит отдельно от диспетчера, чтобы каждая реализация зависела от контракта,
 //а не от файла своего потребителя.
 
+//statusViewChanged и statusViewRefreshed несут одни и те же данные, но разный факт:
+//первое — «состояние изменилось», второе — «состояние переопубликовано без изменений»
+//(периодическая синхронизация). Разные типы, чтобы имя не врало и чтобы подписчик мог выбрать:
+//описание канала TeamSpeak — табло, ему нужны оба; лог — журнал изменений, ему нужно только первое,
+//иначе он пишет вид целиком каждую минуту.
 export type NotificationEvent =
     | { type: "statusViewChanged"; view: ServerDescriptionView[] }
+    | { type: "statusViewRefreshed"; view: ServerDescriptionView[] }
     | { type: "serverOnline"; snapshot: ServerSnapshot }
     | { type: "serverOffline"; snapshot: ServerSnapshot };
 

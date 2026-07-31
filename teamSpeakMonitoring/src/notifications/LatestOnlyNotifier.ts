@@ -24,7 +24,7 @@ export class LatestOnlyNotifier<TType extends NotificationEventType> implements 
     }
 
     public async notify(event: NotificationEventOf<TType>): Promise<void> {
-        //Записываем ДО проверки delivering: иначе события, пришедшие во время доставки,
+        //Записываем ДО проверки delivering: иначе события, пришед шие во время доставки,
         //потерялись бы полностью, а не схлопнулись в последнее.
         this.pending = event;
 
@@ -44,11 +44,11 @@ export class LatestOnlyNotifier<TType extends NotificationEventType> implements 
             }
         } catch (error) {
             //Доставка упала, и цикла больше нет. Если за это время пришло новое состояние,
-            //забрать его некому до следующего события — а следующего может и не быть:
-            //ServerMonitor эмитит viewChanged только при ИЗМЕНЕНИИ состояния. Значит описание
-            //канала останется устаревшим до первого реального изменения.
-            //Дырка известна и записана в долг (AGENTS.md, п. 24); лечится периодическим
-            //подтверждением состояния. Пока делаем потерю хотя бы видимой.
+            //забрать его некому: ServerMonitor эмитит viewChanged только при ИЗМЕНЕНИИ состояния,
+            //поэтому следующего события может не быть вовсе.
+            //Починка снаружи: StateSync раз в MONITOR_STATE_SYNC_INTERVAL_MS публикует текущее
+            //состояние независимо от изменений, и потерянное доезжает следующим тиком (итерация 8a).
+            //Предупреждение остаётся: потеря реальна, а опоздание на минуту стоит видеть в логе.
             if (this.pending !== undefined) {
                 this.pending = undefined;
                 this.logger.warn(

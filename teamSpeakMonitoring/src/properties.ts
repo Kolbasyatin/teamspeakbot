@@ -99,6 +99,22 @@ const monitorConfig = convict<MonitorProperties>({
     },
 });
 
+//Период повторной публикации текущего состояния. Отдельно от MonitorProperties намеренно:
+//монитор про эту периодику не знает, тик живёт в composition root. Имя переменной оставлено
+//в семье MONITOR_*, потому что речь о состоянии, которое собирает монитор.
+export interface StateSyncProperties {
+    intervalMs: number;
+}
+
+const stateSyncConfig = convict<StateSyncProperties>({
+    intervalMs: {
+        doc: "Interval in milliseconds between republishing current server state",
+        format: "nat",
+        default: 60_000,
+        env: "MONITOR_STATE_SYNC_INTERVAL_MS",
+    },
+});
+
 const syncServerConfig = convict<SyncServerPort>({
     port: {
         doc: "Sync Server port",
@@ -199,6 +215,7 @@ syncServerConfig.validate({allowed: "strict"});
 teamSpeakChannelsConfig.validate({allowed: "strict"});
 tgConfig.validate({allowed: "strict"});
 monitorConfig.validate({allowed: "strict"});
+stateSyncConfig.validate({allowed: "strict"});
 
 export const properties: TeamSpeakProperties = config.getProperties();
 export const dbConfig = databaseConfig.getProperties()
@@ -206,3 +223,4 @@ export const syncConfig = syncServerConfig.getProperties()
 export const teamSpeakChannelNames = teamSpeakChannelsConfig.getProperties();
 export const tgProperties = tgConfig.getProperties();
 export const monitorProperties = monitorConfig.getProperties();
+export const stateSyncProperties = stateSyncConfig.getProperties();

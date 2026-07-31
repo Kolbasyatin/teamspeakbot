@@ -118,6 +118,12 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         return [...this.probes.values()].map(probe => probe.getSnapshot());
     }
 
+    //Текущий вид по запросу. Нужен периодической синхронизации состояния: она публикует то же,
+    //что уходит в событии viewChanged, и собирать вид второй раз снаружи нельзя — разъедется.
+    public getView(): ServerDescriptionView[] {
+        return this.toDescriptionView(this.getSnapshot());
+    }
+
     private readonly handleProbeOnline = (event: ServerSnapshot): void => {
         this.emit("serverOnline", event);
     };
@@ -127,7 +133,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     };
 
     private emitChangedIfNeeded(): void {
-        const view = this.toDescriptionView(this.getSnapshot());
+        const view = this.getView();
         const viewKey = JSON.stringify(view);
         this.logger.debug(viewKey);
         if (viewKey === this.lastViewKey) {
