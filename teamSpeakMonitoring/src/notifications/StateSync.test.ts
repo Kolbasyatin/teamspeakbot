@@ -5,6 +5,7 @@ import {LatestOnlyNotifier} from "./LatestOnlyNotifier.js";
 import {NotificationDispatcher} from "./NotificationDispatcher.js";
 import {subscribe, type NotificationEvent, type NotificationEventOf, type Notifier} from "./events.js";
 import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
+import type {ServerSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
 import type {Logger} from "pino";
 
 type ViewEvent = "statusViewChanged" | "statusViewRefreshed";
@@ -13,13 +14,36 @@ function view(players: number): ServerDescriptionView[] {
     return [{id: 1, name: "Test server", status: "online", players, maxPlayers: 64}];
 }
 
+function snapshot(id: number, status: ServerStatus): ServerSnapshot {
+    return {
+        config: {
+            id,
+            name: `Server ${id}`,
+            gameAddress: "127.0.0.1:2001",
+            query: {type: "a2s", host: "127.0.0.1", port: 27015, timeout: 5_000},
+        },
+        status,
+        failedChecks: 0,
+        info: undefined,
+        lastInfo: undefined,
+        statusSince: new Date(0),
+    };
+}
+
 //Источник состояния, который можно менять между тиками: тик обязан брать актуальное,
 //а не то, что было на момент сборки.
-function createStateSource(initial: number): CurrentStateSource & {players: number} {
+function createStateSource(
+    initial: number,
+    servers: ServerSnapshot[] = [],
+): CurrentStateSource & {players: number; servers: ServerSnapshot[]} {
     return {
         players: initial,
+        servers,
         getView(): ServerDescriptionView[] {
             return view(this.players);
+        },
+        getSnapshot(): ServerSnapshot[] {
+            return this.servers;
         },
     };
 }
@@ -103,6 +127,45 @@ test("каждый тик берёт состояние заново, а не з
     assert.deepEqual(
         published.map(event => (event.type === "statusViewRefreshed" ? event.view[0]?.players : undefined)),
         [12, 40],
+    );
+});
+
+test("публикует статус каждого сервера обычными событиями serverOnline/serverOffline", async () => {
+    const published: NotificationEvent[] = [];
+    const stateSync = new StateSync(
+        createStateSource(12, [snapshot(1, "online"), snapshot(2, "offline")]),
+        {
+            notify: async (event): Promise<void> => {
+                published.push(event);
+            },
+        },
+    );
+
+    await stateSync.publishCurrentState();
+
+    assert.deepEqual(
+        published.map(event => event.type),
+        ["statusViewRefreshed", "serverOnline", "serverOffline"],
+    );
+});
+
+test("сервер в статусе unknown пропускается: публиковать про него нечего", async () => {
+    const published: NotificationEvent[] = [];
+    const stateSync = new StateSync(
+        createStateSource(12, [snapshot(1, "unknown"), snapshot(2, "online")]),
+        {
+            notify: async (event): Promise<void> => {
+                published.push(event);
+            },
+        },
+    );
+
+    await stateSync.publishCurrentState();
+
+    assert.deepEqual(
+        published.map(event => event.type),
+        ["statusViewRefreshed", "serverOnline"],
+        "у unknown-сервера события нет, остальные не задеты",
     );
 });
 

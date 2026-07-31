@@ -21,6 +21,7 @@ import {subscribe, type NotificationSubscription} from "./notifications/events.j
 import {TeamSpeakChannelNotifier} from "./notifications/TeamSpeakChannelNotifier.js";
 import {LatestOnlyNotifier} from "./notifications/LatestOnlyNotifier.js";
 import {StateSync} from "./notifications/StateSync.js";
+import {ChangesOnlyNotifier} from "./notifications/ChangesOnlyNotifier.js";
 import {type ScheduledTask, Scheduler} from "./monitoring/Scheduler.js";
 import {LogNotifier} from "./notifications/LogNotifier.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
@@ -96,7 +97,15 @@ async function main(): Promise<any> {
     if (notifierConfig.telegram && telegramApi) {
         const telegramSender = new TelegramSender(telegramApi, tgProperties.channelId);
         //Один нотифаер на оба события: текст берётся из таблицы внутри него.
-        const telegramStatusNotifier = new TelegramStatusNotifier(telegramSender);
+        //Канал Telegram — журнал, а не табло, поэтому обёртка обратная TeamSpeak'у: отправляем
+        //только при расхождении с последним успешно доставленным статусом этого сервера.
+        //Без неё периодическая синхронизация дала бы 1440 сообщений «is online» в сутки;
+        //с ней упавшая отправка повторяется следующим тиком, а совпадающая молчит.
+        const telegramStatusNotifier = new ChangesOnlyNotifier(
+            new TelegramStatusNotifier(telegramSender),
+            event => String(event.snapshot.config.id),
+            event => event.type,
+        );
 
         subscriptions.push(subscribe("serverOnline", "telegram", telegramStatusNotifier));
         subscriptions.push(subscribe("serverOffline", "telegram", telegramStatusNotifier));
