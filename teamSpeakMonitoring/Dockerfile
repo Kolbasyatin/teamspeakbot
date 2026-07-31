@@ -21,6 +21,11 @@ RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist
 
+#SQL миграций tsc не переносит — кладём рядом со скомпилированным migrate.js, который ищет их
+#относительно себя (new URL("./migrations/", import.meta.url)).
+COPY --from=build /app/src/migrations ./dist/migrations
+
 USER node
 
+#Мигратор запускается отдельной командой: node dist/migrate.js (см. .docker/README.md).
 CMD ["node", "dist/main.js"]

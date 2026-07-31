@@ -12,7 +12,8 @@ test.before(async () => {
     pool = createPool(dbConfig)
     repository = new ServerRepository(pool);
 
-    await migrateTestDatabase(pool);
+    //Схема приводится тем же мигратором, что в проде: своего DDL у тестов больше нет.
+    await migrateTestDatabase();
     await truncateTestDatabase(pool);
 
     await insertMonitoredServerFixture(pool, {

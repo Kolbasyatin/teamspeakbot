@@ -9,10 +9,11 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "dev": "tsx watch src/main.ts",
+    "migrate": "tsx src/migrate.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "pretest:unit": "npm run typecheck",
     "test": "NODE_ENV=test tsx --import dotenv-flow/config --test src/*/*.test.ts",
-    "test:unit": "NODE_ENV=test tsx --test src/monitoring/*.test.ts src/notifications/*.test.ts src/queriers/*.test.ts src/persistence/parseQueryConfig.test.ts",
+    "test:unit": "NODE_ENV=test tsx --test src/monitoring/*.test.ts src/notifications/*.test.ts src/queriers/*.test.ts src/persistence/parseQueryConfig.test.ts src/persistence/Migrator.test.ts",
     "test:repo": "NODE_ENV=test tsx --import dotenv-flow/config --test src/persistence/*.test.ts"
   },
   "keywords": [

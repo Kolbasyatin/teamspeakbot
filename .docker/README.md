@@ -73,8 +73,20 @@ docker compose --env-file env/secrets.env -f compose.prod.yaml up -d
 
 ### Схема БД
 
-Мигратора пока нет: схема применяется вручную из `teamSpeakMonitoring/src/migrations/`.
-Решение по мигратору принято (отдельная команда, отдельный процесс, вызов при деплое —
-см. `PLAN.md`, «Принятые решения»), реализация — итерация 6b. Тогда в прод-compose появится
-одноразовый сервис `migrate` и `depends_on: {migrate: {condition: service_completed_successfully}}`;
-место под него помечено `TODO` в `compose.prod.yaml`.
+Миграции применяет **отдельный процесс**, а не приложение: в прод-compose это одноразовый сервис
+`migrate` (`node dist/migrate.js`), а `ts-monitoring` ждёт его успешного завершения через
+`depends_on: {condition: service_completed_successfully}`. Упавшая миграция означает, что приложение
+не поднимется вовсе — это лучше, чем работать на неверной схеме. Ничего вызывать руками не нужно:
+`docker compose up -d` прогоняет миграции сам.
+
+В разработке — командой из `teamSpeakMonitoring/`:
+
+```bash
+npm run migrate          # применит недостающие миграции к базе из .env
+DB_NAME=tsbot_test npm run migrate   # к любой другой, если нужно
+```
+
+Файлы миграций — `teamSpeakMonitoring/src/migrations/NNN_описание.sql`, применяются по возрастанию
+номера, применённые версии лежат в таблице `schema_migrations`. **Применённую миграцию править
+нельзя** — мигратор сверяет контрольную сумму и откажется работать; вместо правки добавляется
+новый файл.

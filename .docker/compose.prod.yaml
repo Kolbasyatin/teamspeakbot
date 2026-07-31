@@ -81,12 +81,33 @@ services:
       timeout: 5s
       retries: 5
 
+  # Миграции — отдельный одноразовый процесс, а не шаг внутри приложения: применение схемы
+  # относится к деплою. Полный аналог init-контейнера из Kubernetes; приложение ждёт его успешного
+  # завершения, поэтому на неверной схеме оно просто не поднимется.
+  migrate:
+    image: ghcr.io/kolbasyatin/teamspeakbot/tsbot-monitor:latest
+    container_name: teamspeak6-migrate
+    # Одноразовый: отработал — вышел. Перезапускать нечего.
+    restart: "no"
+    command: ["node", "dist/migrate.js"]
+
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+    volumes:
+      - ./env/tsbot.env:/app/.env.local:ro
+
   ts-monitoring:
     image: ghcr.io/kolbasyatin/teamspeakbot/tsbot-monitor:latest
     container_name: teamspeak6-monitoring
     restart: unless-stopped
 
     depends_on:
+      # Схема приведена в порядок до старта приложения. Если миграция упала — приложение
+      # не запускается вовсе, и это лучше, чем работать на неверной схеме.
+      migrate:
+        condition: service_completed_successfully
       # Добавлено к исходному варианту: раньше зависимость была только от teamspeak, поэтому
       # приложение могло начать работу раньше готовности БД. Падения из-за этого не было — на первом
       # чтении серверов стоит retry (~90 с, итерация 0), — но ждать готовности честнее, чем ретраить.
@@ -98,11 +119,6 @@ services:
     volumes:
       # dotenv-flow подхватывает .env.local; сам образ конфигов не содержит.
       - ./env/tsbot.env:/app/.env.local:ro
-
-    # TODO (итерация 6b): здесь появится одноразовый сервис `migrate` с той же image и командой
-    # `node dist/migrate.js`, а ts-monitoring получит
-    #   depends_on: {migrate: {condition: service_completed_successfully}}
-    # Пока мигратора нет, схема применяется руками.
 
 volumes:
   teamspeak-data:
