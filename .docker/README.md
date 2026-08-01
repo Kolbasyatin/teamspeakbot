@@ -9,8 +9,8 @@
 | `compose.prod.yaml` | прод: TeamSpeak + MariaDB + образ приложения из GHCR |
 | `mariadb/init/01-databases.sql` | провижининг баз `tsbot` и `tsbot_test` (не миграция схемы) |
 | `Dockerfile` | образ для сервиса `app` из дев-compose (node + git), не для прода |
-| `env/secrets.env.example` | пароли для подстановки в прод-compose |
-| `env/tsbot.env.example` | конфигурация приложения |
+| `env/secrets.env.example` | пароли — единственное их место |
+| `env/tsbot.env.example` | конфигурация приложения (паролей в проде не содержит) |
 | `systemd/teamspeak6.service` | юнит, которым прод-стек запускается и контролируется на машине |
 
 Прод и дев **изолированы по построению**: разные имена проектов (`teamspeak6` против `tsbot-dev`)
@@ -50,6 +50,8 @@ docker compose -f compose.dev.yaml --profile app up -d         # + прилож�
   в `TS_PASSWORD` своего `.env.local`;
 - сервису `app` нужен `env/tsbot.env` (скопировать из `env/tsbot.env.example`). Хосты БД
   и TeamSpeak compose подставит сам — внутри сети это имена сервисов, а не `localhost`.
+  А вот пароли, в отличие от прода, здесь берутся из самого файла: `TS_PASSWORD=devquery`
+  и `DB_PASSWORD=mypassword` — дев-значения из `compose.dev.yaml`, не секреты.
 
 ## Прод
 
@@ -59,6 +61,13 @@ docker compose -f compose.dev.yaml --profile app up -d         # + прилож�
 cp env/secrets.env.example env/secrets.env      # пароли БД и ServerQuery
 cp env/tsbot.env.example  env/tsbot.env         # конфигурация приложения
 ```
+
+Пароли заполняются **только** в `secrets.env`. В `tsbot.env` их дублировать не нужно: одно
+значение в двух файлах рано или поздно разъезжается, поэтому прод-compose передаёт пароли
+приложению сам — `TS_PASSWORD` из `TS_QUERY_ADMIN_PASSWORD`, `DB_PASSWORD` из `TS_DB_PASSWORD`.
+Переменная окружения контейнера перебивает `.env.local`: dotenv-flow не трогает то, что уже есть
+в `process.env`, а convict читает именно его. `TS_QUERY_ADMIN_PASSWORD` — это и есть пароль
+`serveradmin`, тот самый, которым ходят руками по SSH на порт 10022.
 
 Стек запускается не руками, а через systemd — `systemd/teamspeak6.service`:
 

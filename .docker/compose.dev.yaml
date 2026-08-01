@@ -99,9 +99,11 @@ services:
       mariadb:
         condition: service_healthy
 
-    # Секреты сюда не попадают: файл гитигнорится, шаблон рядом (env/monitor.env.example).
+    # Секреты сюда не попадают: файл гитигнорится, шаблон рядом (env/tsbot.env.example).
+    # В отличие от прода, здесь пароли берутся прямо отсюда — заполнить TS_PASSWORD (devquery)
+    # и DB_PASSWORD (mypassword) значениями из этого же compose.
     env_file:
-      - ./env/monitor.env
+      - ./env/tsbot.env
 
     environment:
       # Внутри сети compose база и TeamSpeak — по именам сервисов, а не по localhost.

@@ -97,6 +97,11 @@ services:
       mariadb:
         condition: service_healthy
 
+    environment:
+      # Пароль живёт только в secrets.env. Переменная окружения контейнера перебивает .env.local:
+      # dotenv-flow не перезатирает то, что уже есть в process.env, а convict читает именно его.
+      DB_PASSWORD: "${TS_DB_PASSWORD}"
+
     volumes:
       - ./env/tsbot.env:/app/.env.local:ro
 
@@ -116,6 +121,16 @@ services:
         condition: service_healthy
       teamspeak:
         condition: service_started
+
+    environment:
+      # Пароли не дублируются в tsbot.env: их единственный источник — secrets.env, откуда
+      # одно и то же значение уходит и в сервер, и в приложение. Переменная окружения контейнера
+      # перебивает .env.local (dotenv-flow не трогает уже заданный process.env, convict читает его).
+      #
+      # serveradmin в TeamSpeak заводится с этим же паролем (TSSERVER_QUERY_ADMIN_PASSWORD выше),
+      # им же ходят руками по SSH. Разъехаться значениям теперь негде.
+      TS_PASSWORD: "${TS_QUERY_ADMIN_PASSWORD}"
+      DB_PASSWORD: "${TS_DB_PASSWORD}"
 
     volumes:
       # dotenv-flow подхватывает .env.local; сам образ конфигов не содержит.
