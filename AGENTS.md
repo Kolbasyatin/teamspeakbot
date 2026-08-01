@@ -57,8 +57,13 @@ teamSpeakMonitoring/         сам сервис
                              ServerQuerySource, ServerQueryRole
                              + шпаргалка по строкам в monitored_servers/server_query_sources
       ServerQuery.ts         контракт опроса: ServerQueryConfig (a2s | rest), ServerQueryResult
-                             (все поля опциональные), ServerPollResult (alive + info), Querier
+                             (все поля опциональные), ServerPollResult (alive + info), Querier,
+                             QueryFieldMap; SERVER_QUERY_FIELDS — доменные поля как значение,
+                             нужен для проверки карт, приезжающих из БД
+      pollServerSources.ts   опрос всех источников сервера за тик: параллельный старт, ожидание
+                             главного, окно graceMs для остальных, слияние; здесь же SourceQueryRunner
       mergeQueryResults.ts   чистая функция: ответы источников → один результат, по приоритету
+                             (списка полей нет: ключи приезжают вместе с данными)
       resolvePrimarySource.ts  чистая функция: кто из источников определяет online/offline
       buildMonitorConfigs.ts   StoredServer[] → ServerMonitorConfig[]: сортировка источников,
                              выбор главного, отсев серверов без источников; о пропусках
@@ -85,7 +90,8 @@ teamSpeakMonitoring/         сам сервис
 
     queriers/              ← адаптеры опроса
       A2sQuerier.ts          @callowayisweird/source-query (единственный, кто знает эту библиотеку)
-      RestQuerier.ts         fetch + AbortController, проверка формы ответа
+      RestQuerier.ts         fetch + AbortController, разбор ответа по карте полей из конфига
+                             (пути с точкой, поле за полем)
     teamspeak/             ← адаптер TeamSpeak
       TeamSpeakConnection.ts жизненный цикл одного query-соединения (SSH), lazy connect, close
       TeamSpeakClient.ts     единственное место, знающее про ts3-nodejs-library API
@@ -153,8 +159,17 @@ teamSpeakMonitoring/         сам сервис
 
 Ключевые особенности:
 
-- **Один probe = один сервер.** Статус определяется только фактом ответа. Успех → `online`, `failedChecks = 0`.
-  Неудача → `failedChecks++`, и только при достижении `maxFailedChecks` статус становится `offline`.
+- **Один probe = один сервер.** Статус определяется только фактом ответа **главного** источника.
+  Успех → `online`, `failedChecks = 0`. Неудача → `failedChecks++`, и только при достижении
+  `maxFailedChecks` статус становится `offline`. Молчание второстепенного источника на статус
+  не влияет вовсе — оно означает «поле неизвестно», а не «сервер лёг».
+- **Опрос источников за тик** (`pollServerSources`). Все источники сервера стартуют одновременно,
+  у каждого свой `timeout` внутри `query_config`. Дальше ждём только главного; как только он
+  ответил, второстепенным даётся `MONITOR_SECONDARY_GRACE_MS` — кто не успел, в слиянии этого тика
+  не участвует. Окно отсчитывается **от ответа главного**, иначе быстрые второстепенные съедали бы
+  его бюджет. Главный промолчал — не ждём никого. Потолок тика = `timeout(главного) + grace`,
+  и он важен: `Scheduler` планирует следующий тик после завершения предыдущего, поэтому без потолка
+  один медленный источник растягивал бы интервал опроса всему серверу.
 - **Адаптивный интервал.** Если `failedChecks > 0` и статус ещё не `offline` — опрос учащается до
   `MONITOR_SUSPICIOUS_POLL_INTERVAL_MS` (борьба с ложными срабатываниями), иначе `MONITOR_POLL_INTERVAL_MS`.
 - **Дедупликация вида.** `ServerMonitor` сравнивает `JSON.stringify(view)` с предыдущим и эмитит `viewChanged`
@@ -247,6 +262,7 @@ teamSpeakMonitoring/         сам сервис
 | `MONITOR_POLL_INTERVAL_MS` | `5000` | обычный интервал опроса |
 | `MONITOR_SUSPICIOUS_POLL_INTERVAL_MS` | `1000` | интервал после неудачной попытки |
 | `MONITOR_MAX_FAILED_CHECKS` | `5` | сколько неудач до `offline` |
+| `MONITOR_SECONDARY_GRACE_MS` | `1000` | сколько ждать второстепенные источники **после** ответа главного |
 | `MONITOR_STATE_SYNC_INTERVAL_MS` | `60000` | период повторной публикации текущего состояния |
 
 Секреты кладутся **только** в `*.local`-файлы (gitignored). Коммитятся `.env`, `.env.dev`, `.env.test`
@@ -289,6 +305,22 @@ CREATE TABLE IF NOT EXISTS server_query_sources
 
 `query_config` — сериализованный `ServerQueryConfig`, **включая поле `type`**; `parseQueryConfig`
 проверяет, что оно совпадает с `query_type`, иначе бросает ошибку.
+
+У `rest`-источника в `query_config` обязателен **`fields` — карта полей**: ключ доменное имя,
+значение путь в ответе с точкой как разделителем.
+
+```json
+{"type":"rest","url":"https://e.com/api","timeout":5000,
+ "fields":{"players":"data.online","maxPlayers":"data.capacity"}}
+```
+
+Она нужна потому, что REST — это не протокол, а «любой HTTP с любым JSON»: имена полей у каждого
+эндпоинта свои, и угадывать их нельзя. У `a2s` карты нет и быть не может — там форма ответа задана
+протоколом. Опечатка в ключе карты роняет чтение конфига (`Unknown query fields [...]`): это
+единственная поломка конфига, которая иначе не проявилась бы ничем — источник настроен, эндпоинт
+отвечает, а поле просто никогда не читается. Список допустимых имён — `SERVER_QUERY_FIELDS`
+в `ServerQuery.ts`, единственное место, где доменные поля перечислены как значение: тип в рантайме
+не существует, сверять карту иначе не с чем.
 
 `role` и `priority` — **разные оси**, схлопывать в одну колонку нельзя: `role` про надёжность
 источника как индикатора жизни, `priority` про то, чьи данные выигрывают при слиянии. Рабочая

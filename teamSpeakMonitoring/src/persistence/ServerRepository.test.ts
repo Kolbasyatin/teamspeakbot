@@ -49,7 +49,7 @@ test("источник приезжает с разобранным конфиг
         name: "REST server",
         gameAddress: "https://example.com",
         sources: [{
-            query: {type: "rest", url: "https://example.com/status", timeout: 1000},
+            query: {type: "rest", url: "https://example.com/status", timeout: 1000, fields: {players: "players", maxPlayers: "maxPlayers"}},
             role: "secondary",
             priority: 4,
         }],
@@ -63,6 +63,7 @@ test("источник приезжает с разобранным конфиг
         type: "rest",
         url: "https://example.com/status",
         timeout: 1000,
+        fields: {players: "players", maxPlayers: "maxPlayers"},
     });
 });
 
@@ -73,7 +74,7 @@ test("отключённый источник не попадает в выда�
         sources: [
             {query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}, role: "primary"},
             {
-                query: {type: "rest", url: "https://example.com/status", timeout: 1000},
+                query: {type: "rest", url: "https://example.com/status", timeout: 1000, fields: {players: "players", maxPlayers: "maxPlayers"}},
                 role: "secondary",
                 priority: 1,
                 enabled: false,

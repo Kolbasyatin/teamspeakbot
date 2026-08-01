@@ -76,6 +76,7 @@ export interface MonitorProperties {
     pollIntervalMs: number;
     suspiciousPollIntervalMs: number;
     maxFailedChecks: number;
+    secondaryGraceMs: number;
 }
 
 const monitorConfig = convict<MonitorProperties>({
@@ -96,6 +97,15 @@ const monitorConfig = convict<MonitorProperties>({
         format: "nat",
         default: 5,
         env: "MONITOR_MAX_FAILED_CHECKS",
+    },
+    //Отсчитывается ОТ ответа главного источника, а не от начала опроса: иначе быстрые
+    //второстепенные съедали бы бюджет главного, и тот отваливался бы по чужому таймауту.
+    //Свой timeout у каждого источника лежит в его query_config, здесь только добавка.
+    secondaryGraceMs: {
+        doc: "How long to wait for secondary sources after the primary one has answered",
+        format: "nat",
+        default: 1_000,
+        env: "MONITOR_SECONDARY_GRACE_MS",
     },
 });
 

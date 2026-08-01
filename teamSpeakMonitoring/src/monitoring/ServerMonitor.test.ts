@@ -13,6 +13,8 @@ const monitorProperties: MonitorProperties = {
     pollIntervalMs: 10_000,   //заведомо больше окна теста: опрос происходит один раз, на start()
     suspiciousPollIntervalMs: 10_000,
     maxFailedChecks: 3,
+    //Второстепенных источников в этих тестах нет, поэтому окно ожидания никого не задерживает.
+    secondaryGraceMs: 50,
 };
 
 //Сервер с единственным источником: пока опрашивается только главный, остальным тестам монитора
@@ -43,6 +45,7 @@ function restServer(id: number, name: string): ServerMonitorConfig {
         type: "rest",
         url: "https://example.com/status",
         timeout: 1000,
+        fields: {players: "players", maxPlayers: "maxPlayers"},
     });
 }
 
@@ -131,7 +134,7 @@ test("вид не эмитится повторно, если ничего не 
     let viewChangedCount = 0;
     const monitor = new ServerMonitor(
         //Тут опрос частый: нужно несколько тактов с одинаковым результатом.
-        {pollIntervalMs: 10, suspiciousPollIntervalMs: 10, maxFailedChecks: 3},
+        {pollIntervalMs: 10, suspiciousPollIntervalMs: 10, maxFailedChecks: 3, secondaryGraceMs: 50},
         silentLogger,
         {a2s: createQuerier({players: 5, maxPlayers: 64}), rest: createQuerier(undefined)},
     );
@@ -158,7 +161,7 @@ test("неизвестный тип запроса не мешает опрос�
     );
     const a2s = createQuerier({players: 1, maxPlayers: 2});
     const monitor = new ServerMonitor(
-        {pollIntervalMs: 15, suspiciousPollIntervalMs: 15, maxFailedChecks: 3},
+        {pollIntervalMs: 15, suspiciousPollIntervalMs: 15, maxFailedChecks: 3, secondaryGraceMs: 50},
         silentLogger,
         {a2s, rest: createQuerier(undefined)},
     );

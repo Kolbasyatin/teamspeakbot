@@ -1,7 +1,8 @@
 import {ServerProbe, type ServerSnapshot, type ServerStatus} from "./ServerProbe.js";
 import {EventEmitter} from "node:events";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
-import type {Querier, QuerierRegistry, ServerQueryConfig, ServerQueryResult} from "./ServerQuery.js";
+import type {Querier, QuerierRegistry, ServerQueryConfig} from "./ServerQuery.js";
+import {pollServerSources} from "./pollServerSources.js";
 import {type ScheduledTask, Scheduler} from "./Scheduler.js";
 import {type MonitorProperties} from "../properties.js";
 import type {Logger} from "pino";
@@ -54,11 +55,16 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     private async pollProbe(probe: ServerProbe): Promise<void> {
         this.logger.debug(`Poll сервера ${probe.getServerName()} с периодом ${this.getNextPollDelayMs(probe)} мс.`);
         const config: ServerMonitorConfig = probe.getSnapshot().config;
-        const {query} = config.primarySource;
-        const result: ServerQueryResult | undefined = await this.getQuerier(query.type).query(query);
-        //Опрашивается пока только главный источник: его ответ — это alive, его данные — весь info.
-        //Параллельный опрос config.sources и слияние их результатов встанут ровно сюда.
-        probe.handleResult({alive: result !== undefined, info: result ?? {}});
+        //Монитор знает, каким querier'ом опрашивать источник; сколько кого ждать и как сводить
+        //ответы — дело pollServerSources.
+        const result = await pollServerSources(
+            config,
+            source => this.getQuerier(source.query.type).query(source.query),
+            this.options.secondaryGraceMs,
+            this.logger,
+        );
+
+        probe.handleResult(result);
     }
 
     public forceSync(servers: ServerMonitorConfig[]) {

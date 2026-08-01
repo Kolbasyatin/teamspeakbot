@@ -1,4 +1,8 @@
-import type {ServerQueryConfig} from "../monitoring/ServerQuery.js";
+import {
+    unknownQueryFields,
+    type RestQueryConfig,
+    type ServerQueryConfig,
+} from "../monitoring/ServerQuery.js";
 
 //То, что нужно для разбора конфига опроса, и ничего больше: строка целиком тут не требуется.
 //queryConfig приезжает либо строкой JSON, либо уже разобранным объектом — зависит от того,
@@ -32,5 +36,27 @@ export function parseQueryConfig(row: QueryConfigRow): ServerQueryConfig {
         throw new Error(`query_type mismatch for query source ${row.id} (server ${row.serverId})`);
     }
 
+    if (query.type === "rest") {
+        assertUsableFieldMap(query as Partial<RestQueryConfig>, row);
+    }
+
     return query as ServerQueryConfig;
+}
+
+//Карта полей — единственное место в конфиге, которое проверяется по существу, и вот почему.
+//Опечатка в её ключе не проявляется ничем: источник настроен, эндпоинт отвечает, поле просто
+//никогда не читается. Тип тут не помощник — карта приезжает из БД строкой, компилятор её не видел.
+//Остальные поля конфига при поломке падают в самом опросе и видны по логу querier'а.
+function assertUsableFieldMap(query: Partial<RestQueryConfig>, row: QueryConfigRow): void {
+    const where = `query source ${row.id} (server ${row.serverId})`;
+
+    if (!query.fields || typeof query.fields !== "object") {
+        throw new Error(`Missing fields map in rest query_config for ${where}`);
+    }
+
+    const unknown = unknownQueryFields(query.fields);
+
+    if (unknown.length > 0) {
+        throw new Error(`Unknown query fields [${unknown.join(", ")}] in ${where}`);
+    }
 }
