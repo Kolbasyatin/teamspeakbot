@@ -25,8 +25,7 @@ const serverOnline: NotificationEvent = {
         config: serverConfigFixture({name: "Test server"}),
         status: "online",
         failedChecks: 0,
-        info: undefined,
-        lastInfo: undefined,
+        currentInfo: undefined,
         statusSince: new Date(0),
     },
 };

@@ -20,8 +20,7 @@ function snapshot(id: number, status: ServerStatus): ServerSnapshot {
         config: serverConfigFixture({id}),
         status,
         failedChecks: 0,
-        info: undefined,
-        lastInfo: undefined,
+        currentInfo: undefined,
         statusSince: new Date(0),
     };
 }

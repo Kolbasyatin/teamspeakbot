@@ -5,12 +5,15 @@ import type {Logger} from "pino";
 
 export type ServerStatus = 'online' | 'offline' | 'unknown'
 
+//Слепок состояния probe для внешнего мира. Данные здесь ровно одни — те, за которые ручается
+//текущий статус: у сервера не online их нет, и взять протухшее значение снаружи невозможно.
+//Пережившие падение данные остаются приватными внутри probe — потребителя у них нет, а появится
+//(«было 12 игроков 6 минут назад»), поле вернётся вместе с отметкой времени: без неё оно бесполезно.
 export interface ServerSnapshot {
     config: ServerMonitorConfig;
     status: ServerStatus;
     failedChecks: number;
-    info: ServerQueryResult | undefined;
-    lastInfo: ServerQueryResult | undefined;
+    currentInfo: ServerQueryResult | undefined;
     statusSince: Date;
 }
 
@@ -24,7 +27,10 @@ export interface ServerProbeEvents {
 export class ServerProbe extends EventEmitter<ServerProbeEvents> {
     private status: ServerStatus = 'unknown';
     private failedChecks: number = 0;
-    private lastInfo: ServerQueryResult | undefined;
+    //Последние успешно полученные данные. Живут дольше одного опроса намеренно: пока сервер
+    //в дребезге (неудачи есть, но порога не достигли), он ещё считается online и показывать
+    //надо их. Наружу отдаются только через currentInfo, то есть пока статус это подтверждает.
+    private lastKnownInfo: ServerQueryResult | undefined;
 
     constructor(
         private readonly serverData: ServerMonitorConfig,
@@ -54,8 +60,7 @@ export class ServerProbe extends EventEmitter<ServerProbeEvents> {
             config: this.serverData,
             status: this.status,
             failedChecks: this.failedChecks,
-            info: this.status === 'online' ? this.lastInfo : undefined,
-            lastInfo: this.lastInfo,
+            currentInfo: this.status === 'online' ? this.lastKnownInfo : undefined,
             statusSince: this.statusSince,
         };
     }
@@ -63,7 +68,7 @@ export class ServerProbe extends EventEmitter<ServerProbeEvents> {
     private statusSuccess(result: ServerQueryResult): void {
         this.status = 'online';
         this.failedChecks = 0;
-        this.lastInfo = result;
+        this.lastKnownInfo = result;
     }
 
     private statusFailure() {

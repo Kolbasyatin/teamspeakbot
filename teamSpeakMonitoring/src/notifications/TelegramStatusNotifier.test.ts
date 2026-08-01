@@ -13,8 +13,7 @@ function snapshot(name: string): ServerSnapshot {
         config: serverConfigFixture({name}),
         status: "online",
         failedChecks: 0,
-        info: undefined,
-        lastInfo: undefined,
+        currentInfo: undefined,
         statusSince: new Date(0),
     };
 }

@@ -157,8 +157,8 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
             id: server.config.id,
             name: server.config.name,
             status: server.status,
-            players: server.lastInfo?.players,
-            maxPlayers: server.lastInfo?.maxPlayers,
+            players: server.currentInfo?.players,
+            maxPlayers: server.currentInfo?.maxPlayers,
         }));
     }
 

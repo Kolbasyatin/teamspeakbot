@@ -58,8 +58,7 @@ test("новый probe находится в статусе unknown без на�
 
     assert.equal(snapshot.status, "unknown");
     assert.equal(snapshot.failedChecks, 0);
-    assert.equal(snapshot.info, undefined);
-    assert.equal(snapshot.lastInfo, undefined);
+    assert.equal(snapshot.currentInfo, undefined);
 });
 
 test("первый успешный ответ переводит probe в online", () => {
@@ -71,8 +70,8 @@ test("первый успешный ответ переводит probe в onlin
 
     assert.equal(snapshot.status, "online");
     assert.equal(snapshot.failedChecks, 0);
-    assert.equal(snapshot.info?.players, 10);
-    assert.equal(snapshot.info?.maxPlayers, 64);
+    assert.equal(snapshot.currentInfo?.players, 10);
+    assert.equal(snapshot.currentInfo?.maxPlayers, 64);
     assert.deepEqual(events, ["online"]);
 });
 
@@ -146,7 +145,7 @@ test("повторный успех с другим числом игроков 
     probe.handleResult(pollSuccess(11));
 
     assert.deepEqual(events, []);
-    assert.equal(probe.getSnapshot().info?.players, 11, "но данные обновились");
+    assert.equal(probe.getSnapshot().currentInfo?.players, 11, "но данные обновились");
 });
 
 test("statusSince обновляется только при смене статуса", () => {
@@ -169,15 +168,28 @@ test("statusSince обновляется только при смене стат
     );
 });
 
-test("offline скрывает info, но сохраняет lastInfo", () => {
+test("offline гасит данные: наружу протухшее значение не выходит", () => {
     const probe = createProbe();
     probe.handleResult(pollSuccess(10));
     failTimes(probe, MAX_FAILED_CHECKS);
 
     const snapshot = probe.getSnapshot();
 
-    assert.equal(snapshot.info, undefined, "info отдаётся только для online");
-    assert.equal(snapshot.lastInfo?.players, 10, "последние известные данные сохраняются");
+    assert.equal(snapshot.status, "offline");
+    assert.equal(snapshot.currentInfo, undefined, "данные отдаются только для online");
+});
+
+test("в дребезге данные сохраняются: статус ещё online, значит они актуальны", () => {
+    //Ровно та причина, по которой последние данные переживают неудачный опрос. Порог не достигнут,
+    //сервер считается живым — показывать в этот момент "неизвестно" было бы враньём.
+    const probe = createProbe();
+    probe.handleResult(pollSuccess(10));
+    failTimes(probe, MAX_FAILED_CHECKS - 1);
+
+    const snapshot = probe.getSnapshot();
+
+    assert.equal(snapshot.status, "online");
+    assert.equal(snapshot.currentInfo?.players, 10);
 });
 
 test("getServerName отдаёт имя из конфигурации", () => {
