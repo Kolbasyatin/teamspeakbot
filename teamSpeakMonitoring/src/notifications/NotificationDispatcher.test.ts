@@ -9,6 +9,7 @@ import {
     type NotificationEventType,
     type Notifier,
 } from "./events.js";
+import {serverConfigFixture} from "../test/serverFixtures.js";
 
 //Эти тесты стали возможны только после итерации 2: до неё конструктор диспетчера сам создавал
 //grammy Bot и читал глобальный конфиг, поэтому изолированно он не поднимался вообще.
@@ -21,12 +22,7 @@ const viewChanged: NotificationEvent = {
 const serverOnline: NotificationEvent = {
     type: "serverOnline",
     snapshot: {
-        config: {
-            id: 1,
-            name: "Test server",
-            gameAddress: "127.0.0.1:2001",
-            query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000},
-        },
+        config: serverConfigFixture({name: "Test server"}),
         status: "online",
         failedChecks: 0,
         info: undefined,

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type {Logger} from "pino";
 import {ServerMonitor, type ServerDescriptionView} from "./ServerMonitor.js";
-import type {ServerMonitorConfig} from "./MonitoredServer.js";
+import type {ServerMonitorConfig, ServerQuerySource} from "./MonitoredServer.js";
 import type {Querier, QuerierRegistry, ServerQueryConfig, ServerQueryResult} from "./ServerQuery.js";
 import type {MonitorProperties} from "../properties.js";
 
@@ -15,22 +15,35 @@ const monitorProperties: MonitorProperties = {
     maxFailedChecks: 3,
 };
 
+//Сервер с единственным источником: пока опрашивается только главный, остальным тестам монитора
+//знать про несколько источников нечего.
+function singleSourceServer(
+    id: number,
+    name: string,
+    gameAddress: string,
+    query: ServerQueryConfig,
+): ServerMonitorConfig {
+    const primarySource: ServerQuerySource = {id, role: "primary", priority: 0, query};
+
+    //primarySource — тот же объект, что в sources, как его собирает репозиторий.
+    return {id, name, gameAddress, sources: [primarySource], primarySource};
+}
+
 function a2sServer(id: number, name: string): ServerMonitorConfig {
-    return {
-        id,
-        name,
-        gameAddress: `127.0.0.1:200${id}`,
-        query: {type: "a2s", host: "127.0.0.1", port: 17770 + id, timeout: 1000},
-    };
+    return singleSourceServer(id, name, `127.0.0.1:200${id}`, {
+        type: "a2s",
+        host: "127.0.0.1",
+        port: 17770 + id,
+        timeout: 1000,
+    });
 }
 
 function restServer(id: number, name: string): ServerMonitorConfig {
-    return {
-        id,
-        name,
-        gameAddress: "https://example.com",
-        query: {type: "rest", url: "https://example.com/status", timeout: 1000},
-    };
+    return singleSourceServer(id, name, "https://example.com", {
+        type: "rest",
+        url: "https://example.com/status",
+        timeout: 1000,
+    });
 }
 
 interface RecordingQuerier extends Querier {
@@ -137,10 +150,12 @@ test("вид не эмитится повторно, если ничего не 
 
 test("неизвестный тип запроса не мешает опросу остальных серверов", async () => {
     //В БД query_type — обычная строка, поэтому туда может попасть что угодно.
-    const brokenServer = {
-        ...a2sServer(2, "Broken server"),
-        query: {type: "carrier-pigeon", host: "127.0.0.1", port: 1, timeout: 1} as unknown as ServerQueryConfig,
-    };
+    const brokenServer = singleSourceServer(
+        2,
+        "Broken server",
+        "127.0.0.1:2002",
+        {type: "carrier-pigeon", host: "127.0.0.1", port: 1, timeout: 1} as unknown as ServerQueryConfig,
+    );
     const a2s = createQuerier({players: 1, maxPlayers: 2});
     const monitor = new ServerMonitor(
         {pollIntervalMs: 15, suspiciousPollIntervalMs: 15, maxFailedChecks: 3},

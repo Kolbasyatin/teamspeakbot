@@ -3,18 +3,14 @@ import assert from "node:assert/strict";
 import {TelegramStatusNotifier, type MessageSender} from "./TelegramStatusNotifier.js";
 import type {NotificationEventOf} from "./events.js";
 import type {ServerSnapshot} from "../monitoring/ServerProbe.js";
+import {serverConfigFixture} from "../test/serverFixtures.js";
 
 //У Telegram-нотифаеров тестов не было вовсе: они зависели от конкретного TelegramSender,
 //а тот тянет grammy. Узкий интерфейс MessageSender сделал их проверяемыми.
 
 function snapshot(name: string): ServerSnapshot {
     return {
-        config: {
-            id: 1,
-            name,
-            gameAddress: "127.0.0.1:2001",
-            query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000},
-        },
+        config: serverConfigFixture({name}),
         status: "online",
         failedChecks: 0,
         info: undefined,

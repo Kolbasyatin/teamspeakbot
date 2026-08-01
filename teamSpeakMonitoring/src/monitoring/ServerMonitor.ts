@@ -54,9 +54,10 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     private async pollProbe(probe: ServerProbe): Promise<void> {
         this.logger.debug(`Poll сервера ${probe.getServerName()} с периодом ${this.getNextPollDelayMs(probe)} мс.`);
         const config: ServerMonitorConfig = probe.getSnapshot().config;
-        const result: ServerQueryResult | undefined = await this.getQuerier(config.query.type).query(config.query);
-        //Источник пока один, поэтому он же и главный: его ответ — это alive, его данные — весь info.
-        //Опрос остальных источников и слияние их результатов встанут ровно сюда.
+        const {query} = config.primarySource;
+        const result: ServerQueryResult | undefined = await this.getQuerier(query.type).query(query);
+        //Опрашивается пока только главный источник: его ответ — это alive, его данные — весь info.
+        //Параллельный опрос config.sources и слияние их результатов встанут ровно сюда.
         probe.handleResult({alive: result !== undefined, info: result ?? {}});
     }
 

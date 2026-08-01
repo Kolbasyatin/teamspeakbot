@@ -31,6 +31,32 @@ import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
 import {Bot} from "grammy";
 import {retry} from "./retry.js";
+import {buildMonitorConfigs, type BuildNotice} from "./monitoring/buildMonitorConfigs.js";
+import type {ServerMonitorConfig} from "./monitoring/MonitoredServer.js";
+
+//Предупреждения сборки конфигов — единственное место, где они превращаются в текст.
+//switch, а не if: новый вариант BuildNotice обязан получить свою ветку, иначе присваивание
+//в never не скомпилируется и предупреждение потерялось бы молча.
+function logBuildNotice(notice: BuildNotice): void {
+    switch (notice.type) {
+        case "noEnabledSources":
+            log.warn(
+                {serverId: notice.serverId, name: notice.serverName},
+                "У сервера нет включённых источников опроса — он пропущен",
+            );
+            return;
+        case "primaryFallback":
+            log.warn(
+                {serverId: notice.serverId, name: notice.serverName, sourceId: notice.sourceId},
+                "Нет включённого primary-источника — статус определяет самый приоритетный из оставшихся",
+            );
+            return;
+        default: {
+            const unhandled: never = notice;
+            log.warn({notice: unhandled}, "Неизвестное предупреждение сборки конфигов");
+        }
+    }
+}
 
 //БД может подняться позже нас (в compose она стартует рядом), поэтому первое чтение серверов
 //не должно ронять процесс. Суммарно даёт около 90 секунд на готовность MariaDB.
@@ -162,15 +188,24 @@ async function main(): Promise<any> {
         });
     });
 
-    async function syncMonitorServersFromRepository(): Promise<void> {
-        const servers = await serverRepository.findAllEnabled();
-        monitor.syncServers(servers);
+    //Прочитать строки и собрать из них доменные конфиги — два разных шага, и сшиты они здесь.
+    //Репозиторий отдаёт только то, что лежит в хранилище; правила «кто главный» и «кого
+    //опрашивать нечем» применяет buildMonitorConfigs, а логирует их результат composition root:
+    //сама сборка чистая и про логи не знает.
+    async function loadMonitorConfigs(): Promise<ServerMonitorConfig[]> {
+        const {configs, notices} = buildMonitorConfigs(await serverRepository.findAllEnabled());
 
+        notices.forEach(logBuildNotice);
+
+        return configs;
+    }
+
+    async function syncMonitorServersFromRepository(): Promise<void> {
+        monitor.syncServers(await loadMonitorConfigs());
     }
 
     async function forceSyncMonitorServersFromRepository(): Promise<void> {
-        const servers = await serverRepository.findAllEnabled();
-        monitor.forceSync(servers);
+        monitor.forceSync(await loadMonitorConfigs());
     }
 
     const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

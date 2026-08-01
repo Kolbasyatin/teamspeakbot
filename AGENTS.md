@@ -53,9 +53,16 @@ teamSpeakMonitoring/         сам сервис
                              здесь же ServerDescriptionView
       ServerProbe.ts         состояние одного сервера; ServerSnapshot, ServerStatus
       Scheduler.ts           generic Scheduler<TTask>: per-task setTimeout, sync без сброса таймеров
-      MonitoredServer.ts     ServerMonitorConfig + шпаргалка по строке в monitored_servers
-      ServerQuery.ts         контракт опроса: ServerQueryConfig (a2s | rest), ServerQueryResult,
-                             интерфейс Querier
+      MonitoredServer.ts     StoredServer (контракт хранилища), ServerMonitorConfig,
+                             ServerQuerySource, ServerQueryRole
+                             + шпаргалка по строкам в monitored_servers/server_query_sources
+      ServerQuery.ts         контракт опроса: ServerQueryConfig (a2s | rest), ServerQueryResult
+                             (все поля опциональные), ServerPollResult (alive + info), Querier
+      mergeQueryResults.ts   чистая функция: ответы источников → один результат, по приоритету
+      resolvePrimarySource.ts  чистая функция: кто из источников определяет online/offline
+      buildMonitorConfigs.ts   StoredServer[] → ServerMonitorConfig[]: сортировка источников,
+                             выбор главного, отсев серверов без источников; о пропусках
+                             и подменах сообщает BuildNotice[], логирует их composition root
     notifications/         ← домен уведомлений + реализации каналов доставки
       events.ts              контракт: NotificationEvent, NotificationEventOf<T>, Notifier<T>,
                              NotificationSubscription и subscribe() — единственное место
@@ -87,7 +94,8 @@ teamSpeakMonitoring/         сам сервис
       TelegramBot.ts         grammy long-polling, команды бота
       TelegramSender.ts      отправка текста в чат
     persistence/           ← адаптер БД
-      ServerRepository.ts    findAllEnabled(): читает monitored_servers, маппит строки
+      ServerRepository.ts    findAllEnabled(): читает monitored_servers + server_query_sources
+                             и отдаёт StoredServer[]. Доменных решений не принимает
       parseQueryConfig.ts    чистая функция разбора query_config (вся содержательная логика
                              persistence); проверяется в test:unit, без БД
       Migrator.ts            применяет недостающие миграции; здесь же контракт MigrationStore
@@ -97,8 +105,10 @@ teamSpeakMonitoring/         сам сервис
     admin/AdminServer.ts   ← адаптер HTTP: node:http, POST-роуты → события
 
     migrations/NNN_*.sql         миграции, применяются по возрастанию номера
-    test/databaseTestUtils.ts    миграция тестовой БД тем же мигратором, truncate, фикстуры;
+    test/databaseTestUtils.ts    миграция тестовой БД тем же мигратором, очистка, фикстуры;
                              assertTestDatabase — предохранитель по имени базы
+    test/serverFixtures.ts       serverConfigFixture(): готовый ServerMonitorConfig для тестов,
+                             которым состав источников безразличен
 ```
 
 Логика имён: **домен назван по задаче** (`monitoring`, `notifications`), **адаптеры — по тому, что они
@@ -108,11 +118,12 @@ teamSpeakMonitoring/         сам сервис
 ## 3. Runtime-поток
 
 ```
-                     ┌──────────────────┐
-   MariaDB ──────────│ ServerRepository │
-                     └────────┬─────────┘
-                              │ findAllEnabled()
-   POST /internal/            ▼
+                     ┌──────────────────┐   StoredServer[]   ┌──────────────────────┐
+   MariaDB ──────────│ ServerRepository │───────────────────▶│ buildMonitorConfigs  │
+                     └──────────────────┘  только чтение     │ порядок, главный,    │
+                              findAllEnabled()               │ отсев + notices      │
+                                                             └──────────┬───────────┘
+   POST /internal/                          ServerMonitorConfig[]       ▼
    reload-servers    ┌──────────────────┐   sync    ┌──────────────┐
    ─── AdminServer ─▶│  ServerMonitor   │──────────▶│  Scheduler   │
                      │  Map<id, Probe>  │◀──────────│ per-task     │
@@ -246,7 +257,9 @@ teamSpeakMonitoring/         сам сервис
 
 ## 6. База данных
 
-Единственная таблица — `monitored_servers`:
+Две таблицы: сервер и его источники опроса. До миграции 002 таблица была одна, и колонки
+`query_type` / `query_config` лежали прямо в `monitored_servers` — то есть схема утверждала,
+что источник у сервера ровно один.
 
 ```sql
 CREATE TABLE IF NOT EXISTS monitored_servers
@@ -254,10 +267,21 @@ CREATE TABLE IF NOT EXISTS monitored_servers
     id           bigint unsigned auto_increment primary key,
     name         varchar(255)                           not null,
     game_address varchar(255)                           not null,  -- адрес для игроков, не для опроса
+    enabled      tinyint(1) default 1                   not null,
+    created_at   timestamp  default current_timestamp() not null,
+    updated_at   timestamp  default current_timestamp() not null on update current_timestamp()
+);
+
+CREATE TABLE IF NOT EXISTS server_query_sources
+(
+    id           bigint unsigned auto_increment primary key,
+    server_id    bigint unsigned                        not null,  -- → monitored_servers.id, ON DELETE CASCADE
+    role         enum ('primary','secondary')           not null,  -- primary решает online/offline
+    priority     int        default 0                   not null,  -- меньше — важнее; порядок слияния
     query_type   varchar(32)                            not null,  -- 'a2s' | 'rest'
     query_config longtext collate utf8mb4_bin           not null
         check (json_valid(`query_config`)),                        -- ServerQueryConfig как JSON
-    enabled      tinyint(1) default 1                   not null,
+    enabled      tinyint(1) default 1                   not null,  -- отключает источник, не сервер
     created_at   timestamp  default current_timestamp() not null,
     updated_at   timestamp  default current_timestamp() not null on update current_timestamp()
 );
@@ -265,6 +289,20 @@ CREATE TABLE IF NOT EXISTS monitored_servers
 
 `query_config` — сериализованный `ServerQueryConfig`, **включая поле `type`**; `parseQueryConfig`
 проверяет, что оно совпадает с `query_type`, иначе бросает ошибку.
+
+`role` и `priority` — **разные оси**, схлопывать в одну колонку нельзя: `role` про надёжность
+источника как индикатора жизни, `priority` про то, чьи данные выигрывают при слиянии. Рабочая
+комбинация — `primary` у A2S (надёжно показывает, что сервер жив), приоритет данных выше у REST
+(приносит больше полей, но может лежать сам по себе).
+
+Отключить можно любой источник, включая `primary`: главным станет самый приоритетный из оставшихся
+включённых (предупреждение в лог). Сервер, у которого не осталось ни одного включённого источника,
+пропускается — probe для него не создаётся, иначе он копил бы неудачи и уехал в `offline`,
+хотя опроса не было.
+
+Оба правила применяет `buildMonitorConfigs` в домене, а не репозиторий: **хранилище отбирает
+(`WHERE`), но ничего не выводит из прочитанного.** Поэтому замена MariaDB на SQLite — это новая
+реализация чтения, отдающая тот же `StoredServer[]`, и ничего сверх того.
 
 > **Живое доказательство, зачем нужен мигратор (найдено 2026-07-31).** Схема описана в двух местах,
 > и вторая копия — в `src/test/databaseTestUtils.ts` — успела **разъехаться и сломаться**: там
@@ -277,8 +315,11 @@ CREATE TABLE IF NOT EXISTS monitored_servers
 > уходит в 6c.
 
 ```sql
-INSERT INTO monitored_servers (name, game_address, query_type, query_config, enabled)
-VALUES ('#1 ARMA-RUSSIAN.RU', '37.48.253.41:2001', 'a2s',
+INSERT INTO monitored_servers (name, game_address, enabled)
+VALUES ('#1 ARMA-RUSSIAN.RU', '37.48.253.41:2001', TRUE);
+
+INSERT INTO server_query_sources (server_id, role, priority, query_type, query_config, enabled)
+VALUES (LAST_INSERT_ID(), 'primary', 0, 'a2s',
         '{"type":"a2s","host":"37.48.253.41","port":17771,"timeout":5000}', TRUE);
 ```
 
@@ -318,7 +359,7 @@ curl -X POST http://localhost:3000/internal/force-reload-servers  # измени
 **Тесты используют тот же мигратор.** Своего DDL у них больше нет: `migrateTestDatabase()` читает
 тот же каталог миграций и своим подключением (с `multipleStatements`, как в проде) приводит
 `tsbot_test` к актуальной схеме. Поэтому схема существует ровно в одном месте, и разъехаться копиям
-больше негде. `truncateTestDatabase` чистит только `monitored_servers`: `schema_migrations` — состояние
+больше негде. `truncateTestDatabase` чистит только `monitored_servers` (источники уносит `ON DELETE CASCADE`): `schema_migrations` — состояние
 схемы, а не данные теста. Обе функции сначала вызывают `assertTestDatabase`, который отказывается
 работать с базой, чьё имя не кончается на `_test`.
 

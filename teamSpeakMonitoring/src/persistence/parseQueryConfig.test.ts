@@ -5,6 +5,7 @@ import {parseQueryConfig, type QueryConfigRow} from "./parseQueryConfig.js";
 function row(overrides: Partial<QueryConfigRow>): QueryConfigRow {
     return {
         id: 1,
+        serverId: 100,
         queryType: "a2s",
         queryConfig: '{"type":"a2s","host":"127.0.0.1","port":27015,"timeout":5000}',
         ...overrides,
@@ -28,10 +29,10 @@ test("уже разобранный объект проходит как ест�
     assert.deepEqual(config, {type: "rest", url: "https://example.com/status", timeout: 5_000});
 });
 
-test("расхождение query_type с полем type — ошибка с номером сервера", () => {
+test("расхождение query_type с полем type — ошибка с номерами источника и сервера", () => {
     assert.throws(
         () => parseQueryConfig(row({id: 42, queryType: "rest"})),
-        /query_type mismatch for server 42/,
+        /query_type mismatch for query source 42 \(server 100\)/,
     );
 });
 
@@ -43,11 +44,11 @@ test("отсутствие type внутри конфига — то же рас
 });
 
 test("null в query_config — ошибка про непригодный конфиг", () => {
-    assert.throws(() => parseQueryConfig(row({queryConfig: "null"})), /Invalid query_config for server 1/);
+    assert.throws(() => parseQueryConfig(row({queryConfig: "null"})), /Invalid query_config for query source 1 \(server 100\)/);
 });
 
 test("не-объект в query_config — та же ошибка", () => {
-    assert.throws(() => parseQueryConfig(row({queryConfig: "5"})), /Invalid query_config for server 1/);
+    assert.throws(() => parseQueryConfig(row({queryConfig: "5"})), /Invalid query_config for query source 1 \(server 100\)/);
 });
 
 test("невалидный JSON пробрасывается как SyntaxError, а не как ошибка про сервер", () => {

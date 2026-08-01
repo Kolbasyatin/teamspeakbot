@@ -4,17 +4,15 @@ import type {Logger} from "pino";
 import {ServerProbe, type ServerSnapshot} from "./ServerProbe.js";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
 import type {ServerPollResult} from "./ServerQuery.js";
+import {serverConfigFixture} from "../test/serverFixtures.js";
 
 //Характеризационные тесты: фиксируют поведение как есть, до рефакторинга.
 //Порог намеренно меньше боевого (5), чтобы тесты читались.
 const MAX_FAILED_CHECKS = 3;
 
-const serverConfig: ServerMonitorConfig = {
-    id: 1,
-    name: "Test server",
-    gameAddress: "127.0.0.1:2001",
-    query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000},
-};
+//probe конфиг только хранит и отдаёт в снапшоте: опрашивает источники монитор,
+//поэтому их состав здесь не важен.
+const serverConfig: ServerMonitorConfig = serverConfigFixture({name: "Test server"});
 
 //До итерации 3 здесь собирался ServerInfo из библиотеки A2S: 15 обязательных полей, из которых
 //домен читал два. Теперь это доменный тип, и фикстура равна тому, что домен действительно знает.

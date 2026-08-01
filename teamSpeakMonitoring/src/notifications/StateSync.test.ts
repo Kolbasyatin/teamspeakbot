@@ -7,6 +7,7 @@ import {subscribe, type NotificationEvent, type NotificationEventOf, type Notifi
 import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
 import type {ServerSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
 import type {Logger} from "pino";
+import {serverConfigFixture} from "../test/serverFixtures.js";
 
 type ViewEvent = "statusViewChanged" | "statusViewRefreshed";
 
@@ -16,12 +17,7 @@ function view(players: number): ServerDescriptionView[] {
 
 function snapshot(id: number, status: ServerStatus): ServerSnapshot {
     return {
-        config: {
-            id,
-            name: `Server ${id}`,
-            gameAddress: "127.0.0.1:2001",
-            query: {type: "a2s", host: "127.0.0.1", port: 27015, timeout: 5_000},
-        },
+        config: serverConfigFixture({id}),
         status,
         failedChecks: 0,
         info: undefined,

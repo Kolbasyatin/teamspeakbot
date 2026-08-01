@@ -1,5 +1,6 @@
 import {createConnection, type Pool} from "mariadb";
 import type {Logger} from "pino";
+import type {ServerQueryRole} from "../monitoring/MonitoredServer.js";
 import type {ServerQueryConfig} from "../monitoring/ServerQuery.js";
 import {dbConfig} from "../properties.js";
 import {readMigrationFiles} from "../persistence/migrationFiles.js";
@@ -50,33 +51,63 @@ export async function migrateTestDatabase(): Promise<void> {
 }
 
 //schema_migrations намеренно не чистим: это состояние схемы, а не данные теста.
+//DELETE, а не TRUNCATE: на monitored_servers ссылается server_query_sources, и InnoDB
+//не даёт усечь таблицу под внешним ключом. Источники уносит ON DELETE CASCADE.
+//Отключать FOREIGN_KEY_CHECKS нельзя: настройка сессионная, а pool раздаёт разные соединения.
 export async function truncateTestDatabase(pool: Pool): Promise<void> {
     assertTestDatabase(dbConfig.database);
 
-    await pool.query("TRUNCATE TABLE monitored_servers");
+    await pool.query("DELETE FROM monitored_servers");
 }
 
+//Один источник опроса в фикстуре. role и priority со значениями по умолчанию: тестам,
+//которым безразличен выбор главного, не приходится их указывать.
+export interface QuerySourceFixture {
+    query: ServerQueryConfig;
+    role?: ServerQueryRole;
+    priority?: number;
+    enabled?: boolean;
+}
+
+//Возвращает id вставленного сервера: тестам про несколько источников он нужен, чтобы
+//сопоставить выдачу репозитория с тем, что они вставили.
 export async function insertMonitoredServerFixture(
     pool: Pool,
     fixture: {
         name: string;
         gameAddress: string;
-        query: ServerQueryConfig;
+        sources: QuerySourceFixture[];
         enabled?: boolean;
     },
-): Promise<void> {
-    await pool.query(
+): Promise<number> {
+    const inserted = await pool.query(
         `
             INSERT INTO monitored_servers
-                (name, game_address, query_type, query_config, enabled)
-            VALUES (?, ?, ?, ?, ?)
+                (name, game_address, enabled)
+            VALUES (?, ?, ?)
         `,
-        [
-            fixture.name,
-            fixture.gameAddress,
-            fixture.query.type,
-            JSON.stringify(fixture.query),
-            fixture.enabled ?? true,
-        ],
+        [fixture.name, fixture.gameAddress, fixture.enabled ?? true],
     );
+
+    const serverId = Number(inserted.insertId);
+
+    for (const source of fixture.sources) {
+        await pool.query(
+            `
+                INSERT INTO server_query_sources
+                    (server_id, role, priority, query_type, query_config, enabled)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `,
+            [
+                serverId,
+                source.role ?? "primary",
+                source.priority ?? 0,
+                source.query.type,
+                JSON.stringify(source.query),
+                source.enabled ?? true,
+            ],
+        );
+    }
+
+    return serverId;
 }
