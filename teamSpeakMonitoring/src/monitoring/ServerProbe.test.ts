@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type {Logger} from "pino";
 import {ServerProbe, type ServerSnapshot} from "./ServerProbe.js";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
-import type {ServerQueryResult} from "./ServerQuery.js";
+import type {ServerPollResult} from "./ServerQuery.js";
 
 //Характеризационные тесты: фиксируют поведение как есть, до рефакторинга.
 //Порог намеренно меньше боевого (5), чтобы тесты читались.
@@ -18,8 +18,14 @@ const serverConfig: ServerMonitorConfig = {
 
 //До итерации 3 здесь собирался ServerInfo из библиотеки A2S: 15 обязательных полей, из которых
 //домен читал два. Теперь это доменный тип, и фикстура равна тому, что домен действительно знает.
-function serverInfo(players: number, maxPlayers: number = 64): ServerQueryResult {
-    return {players, maxPlayers};
+//alive — ответ главного источника; для probe это единственный источник статуса.
+function pollSuccess(players: number, maxPlayers: number = 64): ServerPollResult {
+    return {alive: true, info: {players, maxPlayers}};
+}
+
+//Главный источник промолчал. info пустой, а не отсутствующий: слиться было нечему.
+function pollFailure(): ServerPollResult {
+    return {alive: false, info: {}};
 }
 
 const silentLogger = {
@@ -45,7 +51,7 @@ function recordEvents(probe: ServerProbe): string[] {
 
 function failTimes(probe: ServerProbe, times: number): void {
     for (let attempt = 0; attempt < times; attempt += 1) {
-        probe.handleResult(undefined);
+        probe.handleResult(pollFailure());
     }
 }
 
@@ -62,7 +68,7 @@ test("первый успешный ответ переводит probe в onlin
     const probe = createProbe();
     const events = recordEvents(probe);
 
-    probe.handleResult(serverInfo(10));
+    probe.handleResult(pollSuccess(10));
     const snapshot = probe.getSnapshot();
 
     assert.equal(snapshot.status, "online");
@@ -97,13 +103,13 @@ test("неудача на пороге переводит probe в offline", () 
 
 test("успех после offline немедленно возвращает online", () => {
     const probe = createProbe();
-    probe.handleResult(serverInfo(10));
+    probe.handleResult(pollSuccess(10));
     failTimes(probe, MAX_FAILED_CHECKS);
     assert.equal(probe.getSnapshot().status, "offline");
 
     const events = recordEvents(probe);
     //Одного успешного ответа достаточно: гистерезис асимметричный.
-    probe.handleResult(serverInfo(10));
+    probe.handleResult(pollSuccess(10));
 
     assert.equal(probe.getSnapshot().status, "online");
     assert.deepEqual(events, ["online"]);
@@ -115,7 +121,7 @@ test("успех сбрасывает счётчик неудач", () => {
     failTimes(probe, MAX_FAILED_CHECKS - 1);
     assert.equal(probe.getSnapshot().failedChecks, MAX_FAILED_CHECKS - 1);
 
-    probe.handleResult(serverInfo(10));
+    probe.handleResult(pollSuccess(10));
 
     assert.equal(probe.getSnapshot().failedChecks, 0);
 });
@@ -135,11 +141,11 @@ test("повторный успех с другим числом игроков 
     //Событий у probe теперь ровно два — только переходы статуса. Изменение числа игроков
     //наружу отдаёт ServerMonitor через viewChanged, у probe для этого события нет.
     const probe = createProbe();
-    probe.handleResult(serverInfo(10));
+    probe.handleResult(pollSuccess(10));
 
     const events = recordEvents(probe);
 
-    probe.handleResult(serverInfo(11));
+    probe.handleResult(pollSuccess(11));
 
     assert.deepEqual(events, []);
     assert.equal(probe.getSnapshot().info?.players, 11, "но данные обновились");
@@ -147,10 +153,10 @@ test("повторный успех с другим числом игроков 
 
 test("statusSince обновляется только при смене статуса", () => {
     const probe = createProbe();
-    probe.handleResult(serverInfo(10));
+    probe.handleResult(pollSuccess(10));
     const afterOnline = probe.getSnapshot().statusSince;
 
-    probe.handleResult(serverInfo(11));
+    probe.handleResult(pollSuccess(11));
     assert.equal(
         probe.getSnapshot().statusSince,
         afterOnline,
@@ -167,7 +173,7 @@ test("statusSince обновляется только при смене стат
 
 test("offline скрывает info, но сохраняет lastInfo", () => {
     const probe = createProbe();
-    probe.handleResult(serverInfo(10));
+    probe.handleResult(pollSuccess(10));
     failTimes(probe, MAX_FAILED_CHECKS);
 
     const snapshot = probe.getSnapshot();

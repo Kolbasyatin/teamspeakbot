@@ -55,7 +55,9 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         this.logger.debug(`Poll сервера ${probe.getServerName()} с периодом ${this.getNextPollDelayMs(probe)} мс.`);
         const config: ServerMonitorConfig = probe.getSnapshot().config;
         const result: ServerQueryResult | undefined = await this.getQuerier(config.query.type).query(config.query);
-        probe.handleResult(result);
+        //Источник пока один, поэтому он же и главный: его ответ — это alive, его данные — весь info.
+        //Опрос остальных источников и слияние их результатов встанут ровно сюда.
+        probe.handleResult({alive: result !== undefined, info: result ?? {}});
     }
 
     public forceSync(servers: ServerMonitorConfig[]) {

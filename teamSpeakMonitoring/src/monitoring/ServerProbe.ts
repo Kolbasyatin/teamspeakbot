@@ -1,5 +1,5 @@
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
-import type {ServerQueryResult} from "./ServerQuery.js";
+import type {ServerPollResult, ServerQueryResult} from "./ServerQuery.js";
 import {EventEmitter} from "node:events";
 import type {Logger} from "pino";
 
@@ -35,11 +35,13 @@ export class ServerProbe extends EventEmitter<ServerProbeEvents> {
         super();
     }
 
-    public handleResult(result: ServerQueryResult | undefined): void {
+    public handleResult(result: ServerPollResult): void {
         const previousStatus = this.status;
-        //Статус сервера определяется только лишь тем, пришел ли ответ. Если да, то он точно online
-        if (result) {
-            this.statusSuccess(result);
+        //Статус сервера определяется только лишь тем, ответил ли ГЛАВНЫЙ источник. Если да,
+        //то сервер точно online. Данные второстепенных источников на статус не влияют:
+        //их молчание означает "поле неизвестно", а не "сервер лёг".
+        if (result.alive) {
+            this.statusSuccess(result.info);
         } else {
             this.statusFailure();
         }
