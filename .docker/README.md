@@ -11,6 +11,7 @@
 | `Dockerfile` | образ для сервиса `app` из дев-compose (node + git), не для прода |
 | `env/secrets.env.example` | пароли для подстановки в прод-compose |
 | `env/tsbot.env.example` | конфигурация приложения |
+| `systemd/teamspeak6.service` | юнит, которым прод-стек запускается и контролируется на машине |
 
 Прод и дев **изолированы по построению**: разные имена проектов (`teamspeak6` против `tsbot-dev`)
 и разные имена томов, поэтому дев-окружение не может подключиться к прод-данным или затереть их.
@@ -59,14 +60,36 @@ cp env/secrets.env.example env/secrets.env      # пароли БД и ServerQue
 cp env/tsbot.env.example  env/tsbot.env         # конфигурация приложения
 ```
 
-Запуск и обновление:
+Стек запускается не руками, а через systemd — `systemd/teamspeak6.service`:
 
 ```bash
-docker compose --env-file env/secrets.env -f compose.prod.yaml pull
-docker compose --env-file env/secrets.env -f compose.prod.yaml up -d
+sudo cp systemd/teamspeak6.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now teamspeak6
 ```
 
-`--env-file` обязателен: без него не подставятся `${TS_DB_PASSWORD}` и остальные пароли.
+Юнит один на весь compose-проект: systemd владеет стеком целиком и отдельными контейнерами
+не управляет. Поэтому в `compose.prod.yaml` нет политик `restart` — иначе docker поднимал бы
+упавший контейнер сам, systemd об аварии не узнавал бы, а `systemctl status` показывал бы,
+что всё в порядке. Хозяин перезапуска ровно один.
+
+```bash
+systemctl status teamspeak6      # состояние
+systemctl restart teamspeak6     # перезапуск стека
+journalctl -u teamspeak6 -f      # логи всех контейнеров одним потоком
+```
+
+Обновление на новый образ — pull и перезапуск (`pull` не в юните намеренно: перезапуск сервиса
+не должен незаметно менять версию приложения):
+
+```bash
+cd /opt/teamspeakbot/.docker
+docker compose --env-file env/secrets.env -f compose.prod.yaml pull
+sudo systemctl restart teamspeak6
+```
+
+`--env-file` обязателен в любой ручной команде compose: без него не подставятся
+`${TS_DB_PASSWORD}` и остальные пароли. Юнит его подставляет сам.
 
 Образ приложения собирается отдельно — workflow `Build Docker Images` в GitHub Actions
 (ручной запуск) и публикуется в GHCR.
@@ -77,7 +100,9 @@ docker compose --env-file env/secrets.env -f compose.prod.yaml up -d
 `migrate` (`node dist/migrate.js`), а `ts-monitoring` ждёт его успешного завершения через
 `depends_on: {condition: service_completed_successfully}`. Упавшая миграция означает, что приложение
 не поднимется вовсе — это лучше, чем работать на неверной схеме. Ничего вызывать руками не нужно:
-`docker compose up -d` прогоняет миграции сам.
+старт стека прогоняет миграции сам, то есть каждый `systemctl start|restart teamspeak6`.
+Отдельного systemd-юнита у миграций нет намеренно: порядок и ожидание уже описаны в compose,
+и они должны работать одинаково — и под systemd, и при ручном `docker compose up`.
 
 В разработке — командой из `teamSpeakMonitoring/`:
 

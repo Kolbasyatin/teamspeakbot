@@ -1,0 +1,61 @@
+# Прод-стек под управлением systemd. Один юнит на весь compose-проект teamspeak6:
+# systemd владеет жизненным циклом стека целиком, отдельными контейнерами не управляет.
+#
+# Установка на прод-машине (путь к репозиторию — см. WorkingDirectory ниже):
+#   sudo cp .docker/systemd/teamspeak6.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now teamspeak6
+#
+# Управление:
+#   systemctl status teamspeak6       состояние стека
+#   systemctl restart teamspeak6      перезапуск (миграции прогонятся заново)
+#   journalctl -u teamspeak6 -f       логи всех контейнеров одним потоком
+#
+# Политик restart в compose быть не должно (уже убраны): иначе docker молча поднимал бы
+# упавший контейнер сам, systemd об аварии не узнал бы и status показывал бы «всё хорошо».
+# Перезапуском занимается ровно один хозяин — этот юнит.
+
+[Unit]
+Description=TeamSpeak 6 monitoring stack (docker compose project teamspeak6)
+
+# Без демона docker запускать нечего; Requires ещё и снимет стек, если docker.service остановят.
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+# Секреты и конфиг кладутся на машину руками, в репозитории их нет. Assert, а не Condition:
+# отсутствие файла — это поломка, её надо видеть в failed, а не в тихом «unit skipped».
+AssertPathExists=/opt/teamspeakbot/.docker/env/secrets.env
+AssertPathExists=/opt/teamspeakbot/.docker/env/tsbot.env
+
+# Неустранимая ошибка (упавшая миграция, битый конфиг) не должна крутить рестарты вечно:
+# пять попыток за пять минут, дальше юнит остаётся в failed и ждёт человека.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+# Единственное, что правится под конкретную машину.
+WorkingDirectory=/opt/teamspeakbot/.docker
+
+# up без -d: compose остаётся на переднем плане, и systemd следит за реальным процессом стека,
+# а не за отработавшей командой. Только так работают Restart= и честный systemctl status,
+# а логи контейнеров попадают в journald.
+#
+# --abort-on-container-failure: контейнер, вышедший с ненулевым кодом, роняет весь up,
+# systemd видит ненулевой код и перезапускает стек. Именно failure, а не exit: одноразовый
+# migrate выходит с нулём и абортом не считается — стек продолжает работать.
+Type=exec
+ExecStart=/usr/bin/docker compose --env-file env/secrets.env -f compose.prod.yaml up --abort-on-container-failure --remove-orphans
+
+# down, а не stop: каждый старт начинается с чистого состояния, без контейнеров и сетей
+# от прошлого запуска. Тома именованные, down их не трогает — данные на месте.
+ExecStop=/usr/bin/docker compose --env-file env/secrets.env -f compose.prod.yaml down --remove-orphans
+
+Restart=on-failure
+RestartSec=10s
+
+# Останов: TeamSpeak и MariaDB должны успеть закрыться штатно, дефолтных 90 с может не хватить.
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
