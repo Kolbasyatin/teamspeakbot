@@ -1,4 +1,4 @@
-import {ServerProbe, type ServerSnapshot, type ServerStatus} from "./ServerProbe.js";
+import {ServerProbe, type ServerProbeSnapshot, type ServerStatus} from "./ServerProbe.js";
 import {EventEmitter} from "node:events";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
 import type {Querier, QuerierRegistry, ServerQueryConfig} from "./ServerQuery.js";
@@ -8,29 +8,27 @@ import {type MonitorProperties} from "../properties.js";
 import type {Logger} from "pino";
 
 
-export type ServerDescriptionView = {
-    id: number;
-    name: string;
-    status: ServerStatus;
-    players?: number | undefined;
-    maxPlayers?: number | undefined;
-};
-
 //Карта событий монитора. Словарь свой, не общий с уведомлениями: монитор не должен знать,
 //что его события кто-то куда-то доставляет. Перевод в NotificationEvent делает composition root.
 //Что проверяет компилятор: типы аргументов у emit и listener'а. Чего НЕ проверяет: неизвестное
 //имя события — типы Node в этом случае откатываются на any[], и опечатка в on(...) остаётся
 //тихим no-op. Сузить переопределением on() не выходит: сигнатура становится несовместимой
 //с базовой (TS2416). См. AGENTS.md, п. 23.
+//
+//stateUpdated эмитится ПОСЛЕ КАЖДОГО опроса, безусловно, и несёт сырые снапшоты. Раньше на его
+//месте был viewChanged: монитор сам проецировал состояние в пять полей описания канала TeamSpeak
+//и сам решал по их сравнению, стоит ли будить подписчиков. То есть знал форму чужого вывода —
+//добавь в проекцию поле, которого нет в описании, и TeamSpeak начал бы переписывать канал зря.
+//Теперь монитор сообщает факт «серверы опрошены, вот состояние», а что из него нарисовать
+//и стоит ли вообще, решает каждый потребитель у себя.
 export interface ServerMonitorEvents {
-    viewChanged: [ServerDescriptionView[]];
-    serverOnline: [ServerSnapshot];
-    serverOffline: [ServerSnapshot];
+    stateUpdated: [ServerProbeSnapshot[]];
+    serverOnline: [ServerProbeSnapshot];
+    serverOffline: [ServerProbeSnapshot];
 }
 
 export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
 
-    private lastViewKey?: string;
     private readonly probes = new Map<number, ServerProbe>();
     //Создаётся в конструкторе, а не инициализатором поля: инициализаторы полей выполняются
     //раньше, чем присваиваются параметры-свойства, и logger там был бы ещё undefined.
@@ -123,44 +121,17 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         this.scheduler.stop();
     }
 
-    public getSnapshot(): ServerSnapshot[] {
+    public getSnapshot(): ServerProbeSnapshot[] {
         return [...this.probes.values()].map(probe => probe.getSnapshot());
     }
 
-    //Текущий вид по запросу. Нужен периодической синхронизации состояния: она публикует то же,
-    //что уходит в событии viewChanged, и собирать вид второй раз снаружи нельзя — разъедется.
-    public getView(): ServerDescriptionView[] {
-        return this.toDescriptionView(this.getSnapshot());
-    }
-
-    private readonly handleProbeOnline = (event: ServerSnapshot): void => {
+    private readonly handleProbeOnline = (event: ServerProbeSnapshot): void => {
         this.emit("serverOnline", event);
     };
 
-    private readonly handleProbeOffline = (event: ServerSnapshot): void => {
+    private readonly handleProbeOffline = (event: ServerProbeSnapshot): void => {
         this.emit("serverOffline", event);
     };
-
-    private emitChangedIfNeeded(): void {
-        const view = this.getView();
-        const viewKey = JSON.stringify(view);
-        this.logger.debug(viewKey);
-        if (viewKey === this.lastViewKey) {
-            return;
-        }
-        this.lastViewKey = viewKey;
-        this.emit("viewChanged", view);
-    }
-
-    private toDescriptionView(snapshot: ServerSnapshot[]): ServerDescriptionView[] {
-        return snapshot.map(server => ({
-            id: server.config.id,
-            name: server.config.name,
-            status: server.status,
-            players: server.currentInfo?.players,
-            maxPlayers: server.currentInfo?.maxPlayers,
-        }));
-    }
 
     //Проверка остаётся, несмотря на то что QuerierRegistry покрывает все варианты union:
     //query_type приходит из БД обычной строкой, и там может лежать что угодно.
@@ -190,7 +161,9 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
             id: probe.getSnapshot().config.id,
             run: async (): Promise<void> => {
                 await this.pollProbe(probe);
-                this.emitChangedIfNeeded();
+                //Безусловно, без сравнения с прошлым разом: изменилось ли что-то ЗНАЧИМОЕ —
+                //вопрос, ответ на который зависит от потребителя, и здесь его знать неоткуда.
+                this.emit("stateUpdated", this.getSnapshot());
             },
             getNextDelayMs: (): number => {
                 return this.getNextPollDelayMs(probe);

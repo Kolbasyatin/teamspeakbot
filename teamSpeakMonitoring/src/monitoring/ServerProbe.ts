@@ -9,7 +9,7 @@ export type ServerStatus = 'online' | 'offline' | 'unknown'
 //текущий статус: у сервера не online их нет, и взять протухшее значение снаружи невозможно.
 //Пережившие падение данные остаются приватными внутри probe — потребителя у них нет, а появится
 //(«было 12 игроков 6 минут назад»), поле вернётся вместе с отметкой времени: без неё оно бесполезно.
-export interface ServerSnapshot {
+export interface ServerProbeSnapshot {
     config: ServerMonitorConfig;
     status: ServerStatus;
     failedChecks: number;
@@ -20,8 +20,8 @@ export interface ServerSnapshot {
 //Карта событий: имена и типы аргументов проверяются компилятором, опечатка больше не даст
 //тихого no-op. Событий ровно два — только переходы статуса, на которые есть подписчики.
 export interface ServerProbeEvents {
-    online: [ServerSnapshot];
-    offline: [ServerSnapshot];
+    online: [ServerProbeSnapshot];
+    offline: [ServerProbeSnapshot];
 }
 
 export class ServerProbe extends EventEmitter<ServerProbeEvents> {
@@ -55,7 +55,7 @@ export class ServerProbe extends EventEmitter<ServerProbeEvents> {
         this.commitChanges(previousStatus);
     }
 
-    public getSnapshot(): ServerSnapshot {
+    public getSnapshot(): ServerProbeSnapshot {
         return {
             config: this.serverData,
             status: this.status,

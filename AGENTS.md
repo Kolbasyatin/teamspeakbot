@@ -49,9 +49,9 @@ teamSpeakMonitoring/         сам сервис
     Saiga.ts                 клиент к OpenAI-совместимому API (Ollama). Пока не подключён — см. §9
 
     monitoring/            ← домен: что значит «следить за сервером»
-      ServerMonitor.ts       владеет probes, шедулит опрос, эмитит viewChanged/serverOnline/Offline;
-                             здесь же ServerDescriptionView
-      ServerProbe.ts         состояние одного сервера; ServerSnapshot, ServerStatus
+      ServerMonitor.ts       владеет probes, шедулит опрос, эмитит stateUpdated (после каждого
+                             опроса, безусловно) и serverOnline/Offline (переходы статуса)
+      ServerProbe.ts         состояние одного сервера; ServerProbeSnapshot, ServerStatus
       Scheduler.ts           generic Scheduler<TTask>: per-task setTimeout, sync без сброса таймеров
       MonitoredServer.ts     StoredServer (контракт хранилища), ServerMonitorConfig,
                              ServerQuerySource, ServerQueryRole
@@ -78,8 +78,8 @@ teamSpeakMonitoring/         сам сервис
       LogNotifier.ts         пишет событие в лог
       LatestOnlyNotifier.ts  обёртка «последнее побеждает»: пока доставка идёт, промежуточные
                              события выбрасываются (coalescing)
-      StateSync.ts           периодическая публикация текущего состояния: вид событием
-                             statusViewRefreshed, статусы серверов обычными serverOnline/Offline
+      StateSync.ts           периодическая публикация текущего состояния: состояние событием
+                             serverStateRepublished, статусы серверов обычными serverOnline/Offline
                              (unknown пропускается). Здесь же CurrentStateSource и StatePublisher.
                              Часов внутри нет — когда тикать, решает Scheduler в composition root
       ChangesOnlyNotifier.ts обёртка «только при расхождении»: помнит последнюю УСПЕШНУЮ доставку
@@ -95,7 +95,9 @@ teamSpeakMonitoring/         сам сервис
     teamspeak/             ← адаптер TeamSpeak
       TeamSpeakConnection.ts жизненный цикл одного query-соединения (SSH), lazy connect, close
       TeamSpeakClient.ts     единственное место, знающее про ts3-nodejs-library API
-      ChannelDescriptionRenderer.ts  ServerDescriptionView[] → BBCode-строка описания канала
+      ChannelDescriptionRenderer.ts  ServerProbeSnapshot[] → BBCode-строка описания канала.
+                             render() — с отметкой времени (в канал), renderBody() — без неё
+                             (ключ дедупликации). Проекция снапшота в строки живёт здесь
     telegram/              ← адаптер Telegram
       TelegramBot.ts         grammy long-polling, команды бота
       TelegramSender.ts      отправка текста в чат
@@ -141,19 +143,20 @@ teamSpeakMonitoring/         сам сервис
                         │      │ServerProbe│──────────┐
                         │      └───────────┘          │
                         ▼                             ▼
-                 emitChangedIfNeeded()   ┌────────────────────────┐
-                   viewChanged ─────────▶│ NotificationDispatcher │ раздача по типу события
+                 emit(снапшоты всех)     ┌────────────────────────┐
+                   stateUpdated ────────▶│ NotificationDispatcher │ раздача по типу события
                                          └───────────┬────────────┘
-                        statusViewChanged ───────────┼──▶ TeamSpeakChannelNotifier ─▶ TeamSpeakClient ─▶ TS6
-                      statusViewRefreshed ───────────┤    (подписан на оба события с видом)
-                                                     ├──▶ LogNotifier (только statusViewChanged)
+                         serverStateUpdated ─────────┼──▶ ChangesOnlyNotifier(по тексту описания)
+                                                     │      └▶ LatestOnly ─▶ TeamSpeakChannelNotifier ─▶ TS6
+                      serverStateRepublished ────────┼──▶ LatestOnly ─▶ тот же нотифаер, МИМО дедупликации
+                                                     ├──▶ ChangesOnlyNotifier(по выжимке) ─▶ LogNotifier
                       serverOnline/Offline ──────────┴──▶ ChangesOnlyNotifier ─▶ TelegramStatusNotifier
                                                             (молчит, если то же состояние уже доставлено)
 
-   Scheduler (свой,   ┌───────────┐  getView() + getSnapshot()  ┌─────────────┐
+   Scheduler (свой,   ┌───────────┐       getSnapshot()         ┌─────────────┐
    в composition ────▶│ StateSync │◀────────────────────────────│ServerMonitor│
    root, 60 с)        └─────┬─────┘                             └─────────────┘
-                            │ statusViewRefreshed + serverOnline/Offline по каждому серверу
+                            │ serverStateRepublished + serverOnline/Offline по каждому серверу
                             ▼  NotificationDispatcher
 ```
 
@@ -172,10 +175,15 @@ teamSpeakMonitoring/         сам сервис
   один медленный источник растягивал бы интервал опроса всему серверу.
 - **Адаптивный интервал.** Если `failedChecks > 0` и статус ещё не `offline` — опрос учащается до
   `MONITOR_SUSPICIOUS_POLL_INTERVAL_MS` (борьба с ложными срабатываниями), иначе `MONITOR_POLL_INTERVAL_MS`.
-- **Дедупликация вида.** `ServerMonitor` сравнивает `JSON.stringify(view)` с предыдущим и эмитит `viewChanged`
-  только при отличии — чтобы не дёргать TeamSpeak на каждом poll.
-- **Склейка обновлений TeamSpeak.** `emitChangedIfNeeded()` вызывается после опроса каждого сервера,
-  поэтому за цикл может уйти несколько `viewChanged`, и все — через `void`, без ожидания. Описание
+- **Дедупликация — у потребителя, не в мониторе.** Монитор эмитит `stateUpdated` после каждого опроса,
+  безусловно, и отдаёт сырые снапшоты. Что считать изменением, решает каждый потребитель сам,
+  обёрткой `ChangesOnlyNotifier`: описание канала сравнивает **отрендеренный текст без отметки
+  времени** (`ChannelDescriptionRenderer.renderBody`), журнал — свою выжимку (`summarizeForLog`).
+  Так и должно быть: у них разные представления о том, что важно, и поле, которого нет в описании,
+  записи в TeamSpeak больше не вызывает. До этого монитор проецировал состояние в пять полей
+  описания канала и сравнивал их — то есть знал форму чужого вывода.
+- **Склейка обновлений TeamSpeak.** `stateUpdated` уходит после опроса каждого сервера,
+  поэтому за цикл их несколько, и все — через `void`, без ожидания. Описание
   канала обёрнуто в `LatestOnlyNotifier`: пока запись идёт, новые события перезаписывают друг друга,
   и по завершении доставляется только самое свежее. В очереди никогда не больше одного обновления.
   Telegram **не** обёрнут: там каждое событие — самостоятельный факт.
@@ -183,10 +191,12 @@ teamSpeakMonitoring/         сам сервис
   отдельная задача в собственном `Scheduler` спрашивает у монитора текущее состояние и публикует его.
   Смысл один — «упавшую доставку должен кто-то повторить», — но каналы разной природы, поэтому
   механика для них разная:
-  - **вид → TeamSpeak, безусловно.** Событие `statusViewRefreshed`: данные те же, что
-    в `statusViewChanged`, но факт другой — «переопубликовано без изменений», поэтому имя не врёт
-    и журнал (`LogNotifier`) на него не подписан. Описание канала — табло, перезапись безвредна,
-    и ею же откатывается правка описания, сделанная в TeamSpeak руками.
+  - **состояние → TeamSpeak, безусловно.** Событие `serverStateRepublished`: данные те же, что
+    в `serverStateUpdated`, но факт другой — «публикуется принудительно». Тип и есть тот признак,
+    по которому потребитель отличает «можно промолчать» от «перезаписать вопреки всему»: подписка
+    на него идёт **мимо** `ChangesOnlyNotifier`. Иначе правку описания, сделанную в TeamSpeak
+    руками, мы не откатили бы никогда — у себя-то состояние не менялось. Журнал на это событие
+    не подписан: писать состояние целиком каждую минуту незачем.
   - **статусы серверов → Telegram, только при расхождении.** Публикуются обычные
     `serverOnline`/`serverOffline` по каждому серверу (`unknown` пропускается: сказать нечего),
     а решение «отправлять или молчать» принимает `ChangesOnlyNotifier`, сравнивая с последней
@@ -543,7 +553,7 @@ npm run test:repo  # только src/persistence/*.test.ts
     без единого подписчика. Оба удалены вместе с типом `ServerStatusEvent` — тем самым, о котором
     в коде стоял комментарий «зачем собирать сообщение чтоб потом из него забирать одно поле».
     У probe осталось ровно два события — переходы статуса. Изменение числа игроков наружу отдаёт
-    `ServerMonitor` через `viewChanged`.
+    `ServerMonitor` через `stateUpdated`.
 14. `forceSync` пересоздаёт probes, теряя `status`/`statusSince`/`failedChecks` — после него все серверы
     заново проходят `unknown → online`.
 
@@ -564,8 +574,8 @@ npm run test:repo  # только src/persistence/*.test.ts
 24. ✅ **Закрыто, итерации 8a и 8b. Потеря доставки не восстанавливалась.** Один корень: обновление
     уходило только в момент **изменения** состояния, повторять упавшую доставку было некому.
 
-    **TeamSpeak — закрыто (8a).** `StateSync` раз в `MONITOR_STATE_SYNC_INTERVAL_MS` публикует текущий
-    вид событием `statusViewRefreshed`, и описание канала перезаписывается безусловно. Воспроизводимый
+    **TeamSpeak — закрыто (8a).** `StateSync` раз в `MONITOR_STATE_SYNC_INTERVAL_MS` публикует текущее
+    состояние событием `serverStateRepublished`, и описание канала перезаписывается безусловно. Воспроизводимый
     сценарий (все серверы ушли в offline → TeamSpeak в этот момент недоступен → доставка упала →
     накопленное состояние выброшено → состояние больше не меняется → в описании навсегда «online 12/64»)
     теперь заканчивается записью на следующем тике; зафиксировано тестом `StateSync.test.ts`.

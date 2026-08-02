@@ -2,12 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {TeamSpeakChannelNotifier, type ChannelDescriptionEditor} from "./TeamSpeakChannelNotifier.js";
 import type {NotificationEventOf} from "./events.js";
+import {snapshotFixture} from "../test/serverFixtures.js";
 
-const viewChanged: NotificationEventOf<"statusViewChanged"> = {
-    type: "statusViewChanged",
-    view: [
-        {id: 1, name: "Server one", status: "online", players: 10, maxPlayers: 64},
-        {id: 2, name: "Server two", status: "offline", players: undefined, maxPlayers: undefined},
+const stateUpdated: NotificationEventOf<"serverStateUpdated"> = {
+    type: "serverStateUpdated",
+    snapshots: [
+        snapshotFixture({id: 1, name: "Server one", status: "online", players: 10}),
+        snapshotFixture({id: 2, name: "Server two", status: "offline"}),
     ],
 };
 
@@ -31,7 +32,7 @@ test("описание пишется во все настроенные кан�
     const editor = createEditor();
     const notifier = new TeamSpeakChannelNotifier(editor, ["ServerInfo", "ServerInfoBackup"]);
 
-    await notifier.notify(viewChanged);
+    await notifier.notify(stateUpdated);
 
     assert.deepEqual(
         editor.calls.map(call => call.channelName),
@@ -45,7 +46,7 @@ test("в описание попадают имена и счёт игроков
     const editor = createEditor();
     const notifier = new TeamSpeakChannelNotifier(editor, ["ServerInfo"]);
 
-    await notifier.notify(viewChanged);
+    await notifier.notify(stateUpdated);
     const description = editor.calls[0]?.description ?? "";
 
     assert.match(description, /Server one/);
@@ -54,7 +55,7 @@ test("в описание попадают имена и счёт игроков
     assert.match(description, /offline/);
 });
 
-//Тест «события других типов игнорируются» удалён: нотифаер типизирован под statusViewChanged,
+//Тест «события других типов игнорируются» удалён: нотифаер типизирован под serverStateUpdated,
 //чужое событие в него теперь не передать — это ошибка компиляции, а не поведение в рантайме.
 //Проверять рантайм-тестом нечего, а @ts-expect-error здесь был бы бесполезен: тесты не входят
 //в tsc (см. AGENTS.md, п. 22 долга).
@@ -65,7 +66,7 @@ test("отказ одного канала не мешает попытке об
     const notifier = new TeamSpeakChannelNotifier(editor, ["Broken", "ServerInfo"]);
 
     await assert.rejects(
-        () => notifier.notify(viewChanged),
+        () => notifier.notify(stateUpdated),
         /Channel not found: Broken/,
         "отказ пробрасывается наружу, чтобы NotificationDispatcher его залогировал",
     );
@@ -81,7 +82,7 @@ test("пустой список каналов не приводит к обра
     const editor = createEditor();
     const notifier = new TeamSpeakChannelNotifier(editor, []);
 
-    await notifier.notify(viewChanged);
+    await notifier.notify(stateUpdated);
 
     assert.deepEqual(editor.calls, []);
 });

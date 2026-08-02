@@ -9,25 +9,19 @@ import {
     type NotificationEventType,
     type Notifier,
 } from "./events.js";
-import {serverConfigFixture} from "../test/serverFixtures.js";
+import {snapshotFixture} from "../test/serverFixtures.js";
 
 //Эти тесты стали возможны только после итерации 2: до неё конструктор диспетчера сам создавал
 //grammy Bot и читал глобальный конфиг, поэтому изолированно он не поднимался вообще.
 
-const viewChanged: NotificationEvent = {
-    type: "statusViewChanged",
-    view: [{id: 1, name: "Test server", status: "online", players: 10, maxPlayers: 64}],
+const stateUpdated: NotificationEvent = {
+    type: "serverStateUpdated",
+    snapshots: [snapshotFixture({id: 1, name: "Test server", status: "online", players: 10})],
 };
 
 const serverOnline: NotificationEvent = {
     type: "serverOnline",
-    snapshot: {
-        config: serverConfigFixture({name: "Test server"}),
-        status: "online",
-        failedChecks: 0,
-        currentInfo: undefined,
-        statusSince: new Date(0),
-    },
+    snapshot: snapshotFixture({name: "Test server", status: "online"}),
 };
 
 interface RecordingNotifier<TType extends NotificationEventType> extends Notifier<TType> {
@@ -62,34 +56,34 @@ function createLogger(): {logger: Logger; warnings: Array<{context: Record<strin
 }
 
 test("событие уходит только тем нотифаерам, что подписаны на его тип", async () => {
-    const onView = createNotifier<"statusViewChanged">();
+    const onView = createNotifier<"serverStateUpdated">();
     const onOnline = createNotifier<"serverOnline">();
     const dispatcher = new NotificationDispatcher(
         [
-            subscribe("statusViewChanged", "view", onView),
+            subscribe("serverStateUpdated", "view", onView),
             subscribe("serverOnline", "online", onOnline),
         ],
         createLogger().logger,
     );
 
-    await dispatcher.notify(viewChanged);
+    await dispatcher.notify(stateUpdated);
 
-    assert.deepEqual(onView.received, [viewChanged]);
+    assert.deepEqual(onView.received, [stateUpdated]);
     assert.deepEqual(onOnline.received, [], "не подписанный на этот тип нотифаер не вызывается");
 });
 
 test("все нотифаеры одного события вызываются", async () => {
-    const first = createNotifier<"statusViewChanged">();
-    const second = createNotifier<"statusViewChanged">();
+    const first = createNotifier<"serverStateUpdated">();
+    const second = createNotifier<"serverStateUpdated">();
     const dispatcher = new NotificationDispatcher(
         [
-            subscribe("statusViewChanged", "first", first),
-            subscribe("statusViewChanged", "second", second),
+            subscribe("serverStateUpdated", "first", first),
+            subscribe("serverStateUpdated", "second", second),
         ],
         createLogger().logger,
     );
 
-    await dispatcher.notify(viewChanged);
+    await dispatcher.notify(stateUpdated);
 
     assert.equal(first.received.length, 1);
     assert.equal(second.received.length, 1);
@@ -102,17 +96,17 @@ test("событие без подписчиков не приводит к ош
 });
 
 test("отказ одного нотифаера не мешает остальным", async () => {
-    const failing = createNotifier<"statusViewChanged">({failWith: new Error("канал недоступен")});
-    const healthy = createNotifier<"statusViewChanged">();
+    const failing = createNotifier<"serverStateUpdated">({failWith: new Error("канал недоступен")});
+    const healthy = createNotifier<"serverStateUpdated">();
     const dispatcher = new NotificationDispatcher(
         [
-            subscribe("statusViewChanged", "failing", failing),
-            subscribe("statusViewChanged", "healthy", healthy),
+            subscribe("serverStateUpdated", "failing", failing),
+            subscribe("serverStateUpdated", "healthy", healthy),
         ],
         createLogger().logger,
     );
 
-    await dispatcher.notify(viewChanged);
+    await dispatcher.notify(stateUpdated);
 
     assert.equal(healthy.received.length, 1, "исправный канал получил событие");
 });
@@ -138,11 +132,11 @@ test("отказ нотифаера логируется с его именем 
 test("успешная доставка ничего не логирует", async () => {
     const {logger, warnings} = createLogger();
     const dispatcher = new NotificationDispatcher(
-        [subscribe("statusViewChanged", "log", createNotifier<"statusViewChanged">())],
+        [subscribe("serverStateUpdated", "log", createNotifier<"serverStateUpdated">())],
         logger,
     );
 
-    await dispatcher.notify(viewChanged);
+    await dispatcher.notify(stateUpdated);
 
     assert.deepEqual(warnings, []);
 });

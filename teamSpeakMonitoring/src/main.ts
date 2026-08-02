@@ -23,7 +23,8 @@ import {LatestOnlyNotifier} from "./notifications/LatestOnlyNotifier.js";
 import {StateSync} from "./notifications/StateSync.js";
 import {ChangesOnlyNotifier} from "./notifications/ChangesOnlyNotifier.js";
 import {type ScheduledTask, Scheduler} from "./monitoring/Scheduler.js";
-import {LogNotifier} from "./notifications/LogNotifier.js";
+import {LogNotifier, summarizeForLog} from "./notifications/LogNotifier.js";
+import {ChannelDescriptionRenderer} from "./teamspeak/ChannelDescriptionRenderer.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TelegramSender} from "./telegram/TelegramSender.js";
 import {TelegramStatusNotifier} from "./notifications/TelegramStatusNotifier.js";
@@ -100,7 +101,14 @@ async function main(): Promise<any> {
     const subscriptions: NotificationSubscription[] = [];
 
     if (notifierConfig.log) {
-        subscriptions.push(subscribe("statusViewChanged", "log", new LogNotifier(log)));
+        //Своя дедупликация, не общая с TeamSpeak: журналу интересно изменение ДАННЫХ, поэтому
+        //сравнивается его собственная выжимка. Событие приходит после каждого опроса, без обёртки
+        //в лог уходила бы строка каждые несколько секунд.
+        subscriptions.push(subscribe("serverStateUpdated", "log", new ChangesOnlyNotifier(
+            new LogNotifier(log),
+            () => "servers",
+            event => JSON.stringify(summarizeForLog(event.snapshots)),
+        )));
     }
 
     if (notifierConfig.teamspeak) {
@@ -109,15 +117,23 @@ async function main(): Promise<any> {
         //Telegram оборачивать нельзя — там каждое событие самостоятельный факт.
         //Один экземпляр на оба события: обёртка должна склеивать их вместе, иначе периодическая
         //синхронизация и реальное изменение получат по своей очереди доставки.
-        const teamSpeakNotifier = new LatestOnlyNotifier(
+        const channelBoard = new LatestOnlyNotifier(
             new TeamSpeakChannelNotifier(teamSpeakClient, teamSpeakChannelNames.channels),
             log,
         );
 
-        subscriptions.push(subscribe("statusViewChanged", "teamspeak", teamSpeakNotifier));
-        //Табло состояния перезаписывается и когда ничего не изменилось: так лечится упавшая
-        //доставка и откатывается правка описания, сделанная в TeamSpeak руками.
-        subscriptions.push(subscribe("statusViewRefreshed", "teamspeak", teamSpeakNotifier));
+        //Ячейка одна на всё табло: описание пишется во все каналы одинаковым текстом, различать
+        //нечего. Ключ — ТЕКСТ описания без отметки времени: вопрос «лезть ли в TeamSpeak»
+        //эквивалентен вопросу «изменится ли то, что увидит человек». Отсюда renderBody, а не
+        //render: время в ключе меняется каждую секунду и убило бы дедупликацию совсем.
+        subscriptions.push(subscribe("serverStateUpdated", "teamspeak", new ChangesOnlyNotifier(
+            channelBoard,
+            () => "channelDescription",
+            event => ChannelDescriptionRenderer.renderBody(event.snapshots),
+        )));
+        //А это — мимо дедупликации, безусловной записью: так откатывается правка описания,
+        //сделанная в TeamSpeak руками. О ней мы узнать не можем, поэтому и молчать не имеем права.
+        subscriptions.push(subscribe("serverStateRepublished", "teamspeak", channelBoard));
     }
 
     if (notifierConfig.telegram && telegramApi) {
@@ -127,6 +143,10 @@ async function main(): Promise<any> {
         //только при расхождении с последним успешно доставленным статусом этого сервера.
         //Без неё периодическая синхронизация дала бы 1440 сообщений «is online» в сутки;
         //с ней упавшая отправка повторяется следующим тиком, а совпадающая молчит.
+        //
+        //Ячейка на каждый сервер, ключ — тип события. Один экземпляр обёртки на ОБА события:
+        //подпишешь два разных — у каждой будет своя память, и повтор «is online» после offline
+        //не уйдёт никогда. Тип в subject класть по той же причине нельзя.
         const telegramStatusNotifier = new ChangesOnlyNotifier(
             new TelegramStatusNotifier(telegramSender),
             event => String(event.snapshot.config.id),
@@ -154,10 +174,10 @@ async function main(): Promise<any> {
         getNextDelayMs: (): number => stateSyncProperties.intervalMs,
     }]);
 
-    monitor.on("viewChanged", view => {
+    monitor.on("stateUpdated", snapshots => {
         void dispatcher.notify({
-            type: "statusViewChanged",
-            view,
+            type: "serverStateUpdated",
+            snapshots,
         });
     });
 

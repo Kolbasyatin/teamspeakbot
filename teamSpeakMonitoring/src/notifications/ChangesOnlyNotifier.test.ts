@@ -4,14 +4,13 @@ import {ChangesOnlyNotifier} from "./ChangesOnlyNotifier.js";
 import {StateSync, type CurrentStateSource} from "./StateSync.js";
 import {NotificationDispatcher} from "./NotificationDispatcher.js";
 import {subscribe, type NotificationEventOf, type Notifier} from "./events.js";
-import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
-import type {ServerSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
+import type {ServerProbeSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
 import type {Logger} from "pino";
 import {serverConfigFixture} from "../test/serverFixtures.js";
 
 type StatusEvent = "serverOnline" | "serverOffline";
 
-function snapshot(id: number, status: ServerStatus): ServerSnapshot {
+function snapshot(id: number, status: ServerStatus): ServerProbeSnapshot {
     return {
         config: serverConfigFixture({id}),
         status,
@@ -161,8 +160,7 @@ test("сквозной сценарий: упавшая отправка дое�
         createLogger(),
     );
     const state: CurrentStateSource = {
-        getView: (): ServerDescriptionView[] => [],
-        getSnapshot: (): ServerSnapshot[] => [snapshot(1, "online")],
+        getSnapshot: (): ServerProbeSnapshot[] => [snapshot(1, "online")],
     };
     const stateSync = new StateSync(state, dispatcher);
 

@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Logger} from "pino";
-import {ServerMonitor, type ServerDescriptionView} from "./ServerMonitor.js";
+import {ServerMonitor} from "./ServerMonitor.js";
 import type {ServerMonitorConfig, ServerQuerySource} from "./MonitoredServer.js";
 import type {Querier, QuerierRegistry, ServerQueryConfig, ServerQueryResult} from "./ServerQuery.js";
 import type {MonitorProperties} from "../properties.js";
+import type {ServerProbeSnapshot} from "./ServerProbe.js";
 
 //Эти тесты стали возможны только после инъекции queriers: до неё ServerMonitor сам создавал
 //A2sQuerier и RestQuerier, и любой тест полез бы в реальный UDP и HTTP.
@@ -111,35 +112,38 @@ test("querier получает конфиг именно своего серве
     });
 });
 
-test("результат опроса попадает в вид", async () => {
-    const views: ServerDescriptionView[][] = [];
+test("результат опроса попадает в состояние", async () => {
+    const updates: ServerProbeSnapshot[][] = [];
     const monitor = createMonitor({
         a2s: createQuerier({players: 17, maxPlayers: 64}),
         rest: createQuerier(undefined),
     });
-    monitor.on("viewChanged", view => views.push(view));
+    monitor.on("stateUpdated", snapshots => updates.push(snapshots));
 
     monitor.syncServers([a2sServer(1, "A2S server")]);
     monitor.start();
     await wait(40);
     monitor.stop();
 
-    const last = views.at(-1);
-    assert.deepEqual(last, [
-        {id: 1, name: "A2S server", status: "online", players: 17, maxPlayers: 64},
-    ]);
+    const last = updates.at(-1)?.at(0);
+    assert.equal(last?.config.name, "A2S server");
+    assert.equal(last?.status, "online");
+    assert.deepEqual(last?.currentInfo, {players: 17, maxPlayers: 64});
 });
 
-test("вид не эмитится повторно, если ничего не изменилось", async () => {
-    let viewChangedCount = 0;
+test("состояние эмитится после каждого опроса, даже когда ничего не изменилось", async () => {
+    //Раньше монитор сравнивал вид с прошлым и молчал на совпадении. Сравнение переехало
+    //к потребителям: у описания канала и у журнала разные представления о том, что считать
+    //изменением, и решать за них здесь нечем. Монитор сообщает факт «опрос прошёл».
+    let updates = 0;
     const monitor = new ServerMonitor(
         //Тут опрос частый: нужно несколько тактов с одинаковым результатом.
         {pollIntervalMs: 10, suspiciousPollIntervalMs: 10, maxFailedChecks: 3, secondaryGraceMs: 50},
         silentLogger,
         {a2s: createQuerier({players: 5, maxPlayers: 64}), rest: createQuerier(undefined)},
     );
-    monitor.on("viewChanged", () => {
-        viewChangedCount += 1;
+    monitor.on("stateUpdated", () => {
+        updates += 1;
     });
 
     monitor.syncServers([a2sServer(1, "A2S server")]);
@@ -147,8 +151,7 @@ test("вид не эмитится повторно, если ничего не 
     await wait(120);
     monitor.stop();
 
-    //Такты прошли многократно, но вид менялся ровно один раз: unknown → online 5/64.
-    assert.equal(viewChangedCount, 1);
+    assert.ok(updates > 1, `тактов прошло несколько, событий должно быть столько же, а не одно: ${updates}`);
 });
 
 test("неизвестный тип запроса не мешает опросу остальных серверов", async () => {

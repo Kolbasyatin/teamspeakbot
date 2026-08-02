@@ -1,13 +1,10 @@
 import type {NotificationEvent} from "./events.js";
-import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
-import type {ServerSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
+import type {ServerProbeSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
 
 //Источник текущего состояния. Интерфейс узкий и объявлен у потребителя — как ChannelDescriptionEditor
 //у TeamSpeak-нотифаера: про монитор, probe'ы и опрос здесь знать нечего.
 export interface CurrentStateSource {
-    getView(): ServerDescriptionView[];
-
-    getSnapshot(): ServerSnapshot[];
+    getSnapshot(): ServerProbeSnapshot[];
 }
 
 //Какое событие переопубликовывать для каждого статуса. Record, а не switch: добавится четвёртый
@@ -27,16 +24,17 @@ export interface StatePublisher {
 
 //Периодическая публикация текущего состояния.
 //
-//Зачем: и TeamSpeak, и Telegram узнают о состоянии только в момент ИЗМЕНЕНИЯ. Если именно эта
-//доставка упала, повторить её некому — ServerMonitor следующего события не пришлёт, пока состояние
-//не изменится снова. Ровно этот случай воспроизведён тестом в итерации 5b: все серверы легли,
-//channelEdit упал, и в описании канала навсегда остаётся устаревшее «online 12/64».
+//Зачем: доставка каждого потребителя отфильтрована его собственной дедупликацией — молчим, пока
+//состояние совпадает с последним успешно доставленным. Если доставка упала, повторить её некому:
+//поток событий продолжается, но по нему потребитель промолчит, как только состояние вернётся
+//к прежнему. Этот тик — единственное, что публикуется В ОБХОД дедупликации, поэтому им чинится
+//и упавшая доставка, и правка описания канала, сделанная в TeamSpeak руками.
 //
-//Вид публикуем отдельным типом события (statusViewRefreshed), а не statusViewChanged: ничего
-//не изменилось, и подписчик-журнал (LogNotifier) не должен писать вид целиком каждую минуту.
+//Состояние публикуем отдельным типом (serverStateRepublished), а не serverStateUpdated: тип и есть
+//тот признак, по которому потребитель отличает «можно промолчать» от «перезаписать безусловно».
 //Статусы серверов публикуем **обычными** serverOnline/serverOffline: для них отдельный тип не нужен,
-//потому что решение «отправлять или молчать» принимает обёртка ChangesOnlyNotifier, сравнивая
-//с последним успешно доставленным. Табло переписывается всегда, журнал — только при расхождении.
+//потому что там дедупликация желательна — Telegram это журнал, и повторять «is online» каждую
+//минуту незачем. ChangesOnlyNotifier пропустит их только при расхождении с доставленным.
 //
 //Часов внутри нет: когда публиковать — решает Scheduler в composition root.
 export class StateSync {
@@ -48,12 +46,13 @@ export class StateSync {
     }
 
     public async publishCurrentState(): Promise<void> {
-        await this.publisher.notify({
-            type: "statusViewRefreshed",
-            view: this.state.getView(),
-        });
+        //Одно чтение на весь тик: табло и статусы серверов обязаны говорить об одном и том же
+        //состоянии, а между двумя обращениями к источнику успевает пройти опрос.
+        const snapshots = this.state.getSnapshot();
 
-        for (const snapshot of this.state.getSnapshot()) {
+        await this.publisher.notify({type: "serverStateRepublished", snapshots});
+
+        for (const snapshot of snapshots) {
             const type = STATUS_EVENT[snapshot.status];
 
             if (!type) {

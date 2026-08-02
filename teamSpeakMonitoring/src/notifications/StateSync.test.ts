@@ -2,42 +2,31 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {StateSync, type CurrentStateSource} from "./StateSync.js";
 import {LatestOnlyNotifier} from "./LatestOnlyNotifier.js";
+import {ChangesOnlyNotifier} from "./ChangesOnlyNotifier.js";
 import {NotificationDispatcher} from "./NotificationDispatcher.js";
 import {subscribe, type NotificationEvent, type NotificationEventOf, type Notifier} from "./events.js";
-import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
-import type {ServerSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
+import type {ServerProbeSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
 import type {Logger} from "pino";
-import {serverConfigFixture} from "../test/serverFixtures.js";
+import {snapshotFixture} from "../test/serverFixtures.js";
 
-type ViewEvent = "statusViewChanged" | "statusViewRefreshed";
+type ViewEvent = "serverStateUpdated" | "serverStateRepublished";
 
-function view(players: number): ServerDescriptionView[] {
-    return [{id: 1, name: "Test server", status: "online", players, maxPlayers: 64}];
+function board(players: number): ServerProbeSnapshot[] {
+    return [snapshotFixture({id: 1, name: "Test server", status: "online", players})];
 }
 
-function snapshot(id: number, status: ServerStatus): ServerSnapshot {
-    return {
-        config: serverConfigFixture({id}),
-        status,
-        failedChecks: 0,
-        currentInfo: undefined,
-        statusSince: new Date(0),
-    };
+function snapshot(id: number, status: ServerStatus): ServerProbeSnapshot {
+    return snapshotFixture({id, status});
 }
 
 //Источник состояния, который можно менять между тиками: тик обязан брать актуальное,
 //а не то, что было на момент сборки.
 function createStateSource(
-    initial: number,
-    servers: ServerSnapshot[] = [],
-): CurrentStateSource & {players: number; servers: ServerSnapshot[]} {
+    servers: ServerProbeSnapshot[] = [],
+): CurrentStateSource & {servers: ServerProbeSnapshot[]} {
     return {
-        players: initial,
         servers,
-        getView(): ServerDescriptionView[] {
-            return view(this.players);
-        },
-        getSnapshot(): ServerSnapshot[] {
+        getSnapshot(): ServerProbeSnapshot[] {
             return this.servers;
         },
     };
@@ -84,7 +73,10 @@ function createControllable(): ControllableNotifier {
                 throw error;
             }
 
-            this.delivered.push({type: event.type, players: event.view[0]?.players ?? -1});
+            this.delivered.push({
+                type: event.type,
+                players: event.snapshots[0]?.currentInfo?.players ?? -1,
+            });
         },
     } as ControllableNotifier;
 }
@@ -93,9 +85,10 @@ function flush(): Promise<void> {
     return new Promise(resolve => setImmediate(resolve));
 }
 
-test("публикует текущее состояние событием statusViewRefreshed", async () => {
+test("публикует текущее состояние событием serverStateRepublished", async () => {
     const published: NotificationEvent[] = [];
-    const stateSync = new StateSync(createStateSource(12), {
+    const servers = board(12);
+    const stateSync = new StateSync(createStateSource(servers), {
         notify: async (event): Promise<void> => {
             published.push(event);
         },
@@ -103,12 +96,15 @@ test("публикует текущее состояние событием stat
 
     await stateSync.publishCurrentState();
 
-    assert.deepEqual(published, [{type: "statusViewRefreshed", view: view(12)}]);
+    assert.deepEqual(published, [
+        {type: "serverStateRepublished", snapshots: servers},
+        {type: "serverOnline", snapshot: servers[0]},
+    ]);
 });
 
 test("каждый тик берёт состояние заново, а не запомненное при сборке", async () => {
     const published: NotificationEvent[] = [];
-    const state = createStateSource(12);
+    const state = createStateSource(board(12));
     const stateSync = new StateSync(state, {
         notify: async (event): Promise<void> => {
             published.push(event);
@@ -116,11 +112,13 @@ test("каждый тик берёт состояние заново, а не з
     });
 
     await stateSync.publishCurrentState();
-    state.players = 40;
+    state.servers = board(40);
     await stateSync.publishCurrentState();
 
     assert.deepEqual(
-        published.map(event => (event.type === "statusViewRefreshed" ? event.view[0]?.players : undefined)),
+        published
+            .filter(event => event.type === "serverStateRepublished")
+            .map(event => event.snapshots[0]?.currentInfo?.players),
         [12, 40],
     );
 });
@@ -128,7 +126,7 @@ test("каждый тик берёт состояние заново, а не з
 test("публикует статус каждого сервера обычными событиями serverOnline/serverOffline", async () => {
     const published: NotificationEvent[] = [];
     const stateSync = new StateSync(
-        createStateSource(12, [snapshot(1, "online"), snapshot(2, "offline")]),
+        createStateSource([snapshot(1, "online"), snapshot(2, "offline")]),
         {
             notify: async (event): Promise<void> => {
                 published.push(event);
@@ -140,14 +138,14 @@ test("публикует статус каждого сервера обычны
 
     assert.deepEqual(
         published.map(event => event.type),
-        ["statusViewRefreshed", "serverOnline", "serverOffline"],
+        ["serverStateRepublished", "serverOnline", "serverOffline"],
     );
 });
 
 test("сервер в статусе unknown пропускается: публиковать про него нечего", async () => {
     const published: NotificationEvent[] = [];
     const stateSync = new StateSync(
-        createStateSource(12, [snapshot(1, "unknown"), snapshot(2, "online")]),
+        createStateSource([snapshot(1, "unknown"), snapshot(2, "online")]),
         {
             notify: async (event): Promise<void> => {
                 published.push(event);
@@ -159,35 +157,34 @@ test("сервер в статусе unknown пропускается: публ�
 
     assert.deepEqual(
         published.map(event => event.type),
-        ["statusViewRefreshed", "serverOnline"],
+        ["serverStateRepublished", "serverOnline"],
         "у unknown-сервера события нет, остальные не задеты",
     );
 });
 
 test("состояние, потерянное упавшей доставкой, доезжает следующим тиком", async () => {
     //Это ровно сценарий из итерации 5b, который тогда заканчивался «доставлено: []»:
-    //TeamSpeak недоступен, доставка падает, накопленное состояние выбрасывать некому,
-    //а ServerMonitor следующего viewChanged не пришлёт — состояние больше не меняется.
+    //TeamSpeak недоступен, доставка падает, накопленное состояние выбрасывать некому.
     const inner = createControllable();
     const teamSpeak = new LatestOnlyNotifier(inner, createLogger());
     const dispatcher = new NotificationDispatcher(
         [
-            subscribe("statusViewChanged", "teamspeak", teamSpeak),
-            subscribe("statusViewRefreshed", "teamspeak", teamSpeak),
+            subscribe("serverStateUpdated", "teamspeak", teamSpeak),
+            subscribe("serverStateRepublished", "teamspeak", teamSpeak),
         ],
         createLogger(),
     );
-    const state = createStateSource(12);
+    const state = createStateSource(board(12));
     const stateSync = new StateSync(state, dispatcher);
 
     //Изменение состояния: 12 игроков. Доставка занята и упадёт.
     inner.failNext(new Error("TeamSpeak недоступен"));
-    const failing = dispatcher.notify({type: "statusViewChanged", view: view(12)});
+    const failing = dispatcher.notify({type: "serverStateUpdated", snapshots: board(12)});
     await flush();
 
-    //Пока падающая доставка висит, серверы легли — приходит новое состояние.
-    state.players = 0;
-    void dispatcher.notify({type: "statusViewChanged", view: view(0)});
+    //Пока падающая доставка висит, серверы опустели — приходит новое состояние.
+    state.servers = board(0);
+    void dispatcher.notify({type: "serverStateUpdated", snapshots: board(0)});
     await flush();
 
     inner.release();
@@ -204,7 +201,7 @@ test("состояние, потерянное упавшей доставкой
 
     assert.deepEqual(
         inner.delivered,
-        [{type: "statusViewRefreshed", players: 0}],
+        [{type: "serverStateRepublished", players: 0}],
         "тик доставил актуальное состояние, описание канала больше не врёт",
     );
 });
@@ -214,10 +211,10 @@ test("тик перезаписывает описание, даже когда 
     const inner = createControllable();
     const teamSpeak = new LatestOnlyNotifier(inner, createLogger());
     const dispatcher = new NotificationDispatcher(
-        [subscribe("statusViewRefreshed", "teamspeak", teamSpeak)],
+        [subscribe("serverStateRepublished", "teamspeak", teamSpeak)],
         createLogger(),
     );
-    const stateSync = new StateSync(createStateSource(12), dispatcher);
+    const stateSync = new StateSync(createStateSource(board(12)), dispatcher);
 
     for (let tickNumber = 0; tickNumber < 3; tickNumber++) {
         const tick = stateSync.publishCurrentState();
@@ -229,27 +226,64 @@ test("тик перезаписывает описание, даже когда 
     assert.equal(inner.delivered.length, 3, "три тика — три записи, несмотря на неизменное состояние");
 });
 
+test("принудительная публикация идёт МИМО дедупликации потребителя", async () => {
+    //Главное свойство разделения serverStateUpdated / serverStateRepublished. Первое проходит
+    //через обёртку и молчит на неизменном состоянии; второе пишет всегда — иначе описание,
+    //поправленное в TeamSpeak руками, мы бы не вернули никогда: у себя-то мы ничего не меняли.
+    const written: string[] = [];
+    const channel: Notifier<ViewEvent> = {
+        notify: async (event): Promise<void> => {
+            written.push(event.type);
+        },
+    };
+    const dispatcher = new NotificationDispatcher(
+        [
+            subscribe("serverStateUpdated", "teamspeak", new ChangesOnlyNotifier(
+                channel,
+                () => "channelDescription",
+                event => JSON.stringify(event.snapshots.map(server => server.currentInfo?.players)),
+            )),
+            subscribe("serverStateRepublished", "teamspeak", channel),
+        ],
+        createLogger(),
+    );
+    const stateSync = new StateSync(createStateSource(board(12)), dispatcher);
+
+    await dispatcher.notify({type: "serverStateUpdated", snapshots: board(12)});
+    await dispatcher.notify({type: "serverStateUpdated", snapshots: board(12)});
+
+    assert.deepEqual(written, ["serverStateUpdated"], "неизменное состояние второй записи не вызвало");
+
+    await stateSync.publishCurrentState();
+
+    assert.deepEqual(
+        written,
+        ["serverStateUpdated", "serverStateRepublished"],
+        "тик записал вопреки тому, что состояние то же самое",
+    );
+});
+
 test("лог не получает переопубликованное состояние: у него подписка только на изменения", async () => {
-    //Разделение statusViewChanged / statusViewRefreshed существует ровно для этого: журнал изменений
-    //не должен писать вид целиком каждую минуту.
+    //Разделение serverStateUpdated / serverStateRepublished существует ровно для этого: журнал
+    //изменений не должен писать состояние целиком каждую минуту.
     const changesOnly: NotificationEvent[] = [];
-    const logNotifier: Notifier<"statusViewChanged"> = {
+    const logNotifier: Notifier<"serverStateUpdated"> = {
         notify: async (event): Promise<void> => {
             changesOnly.push(event);
         },
     };
     const dispatcher = new NotificationDispatcher(
-        [subscribe("statusViewChanged", "log", logNotifier)],
+        [subscribe("serverStateUpdated", "log", logNotifier)],
         createLogger(),
     );
-    const stateSync = new StateSync(createStateSource(12), dispatcher);
+    const stateSync = new StateSync(createStateSource(board(12)), dispatcher);
 
     await stateSync.publishCurrentState();
     await stateSync.publishCurrentState();
 
     assert.deepEqual(changesOnly, [], "тики синхронизации в журнал не попали");
 
-    await dispatcher.notify({type: "statusViewChanged", view: view(40)});
+    await dispatcher.notify({type: "serverStateUpdated", snapshots: board(40)});
 
     assert.equal(changesOnly.length, 1, "реальное изменение по-прежнему логируется");
 });

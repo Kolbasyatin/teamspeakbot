@@ -1,20 +1,25 @@
-import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
-import type {ServerSnapshot} from "../monitoring/ServerProbe.js";
+import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
 
 //Контракт уведомлений: что происходит и кто это умеет доставлять.
 //Лежит отдельно от диспетчера, чтобы каждая реализация зависела от контракта,
 //а не от файла своего потребителя.
 
-//statusViewChanged и statusViewRefreshed несут одни и те же данные, но разный факт:
-//первое — «состояние изменилось», второе — «состояние переопубликовано без изменений»
-//(периодическая синхронизация). Разные типы, чтобы имя не врало и чтобы подписчик мог выбрать:
-//описание канала TeamSpeak — табло, ему нужны оба; лог — журнал изменений, ему нужно только первое,
-//иначе он пишет вид целиком каждую минуту.
+//serverStateUpdated и serverStateRepublished несут одни и те же данные, но разный факт:
+//первое — «серверы опрошены» (приходит после каждого опроса, без фильтрации), второе —
+//«состояние публикуется принудительно» (периодическая синхронизация).
+//
+//Разница не в данных, а в том, можно ли по этому событию промолчать. Первое проходит через
+//дедупликацию потребителя: их много за минуту, и писать по каждому некуда. Второе идёт мимо неё,
+//поэтому им чинится то, о чём мы узнать не можем, — описание канала, поправленное в TeamSpeak
+//руками. Совпадает с нашим состоянием оно или нет, тик всё равно перезапишет.
+//
+//Обоим событиям достаются сырые снапшоты, а не готовый вид: что из них показать — дело
+//потребителя, и у описания канала, журнала и будущего HTTP-эндпоинта ответы разные.
 export type NotificationEvent =
-    | { type: "statusViewChanged"; view: ServerDescriptionView[] }
-    | { type: "statusViewRefreshed"; view: ServerDescriptionView[] }
-    | { type: "serverOnline"; snapshot: ServerSnapshot }
-    | { type: "serverOffline"; snapshot: ServerSnapshot };
+    | { type: "serverStateUpdated"; snapshots: ServerProbeSnapshot[] }
+    | { type: "serverStateRepublished"; snapshots: ServerProbeSnapshot[] }
+    | { type: "serverOnline"; snapshot: ServerProbeSnapshot }
+    | { type: "serverOffline"; snapshot: ServerProbeSnapshot };
 
 export type NotificationEventType = NotificationEvent["type"];
 

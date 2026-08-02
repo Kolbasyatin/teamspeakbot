@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Logger} from "pino";
-import {ServerProbe, type ServerSnapshot} from "./ServerProbe.js";
+import {ServerProbe, type ServerProbeSnapshot} from "./ServerProbe.js";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
 import type {ServerPollResult} from "./ServerQuery.js";
 import {serverConfigFixture} from "../test/serverFixtures.js";
@@ -54,7 +54,7 @@ function failTimes(probe: ServerProbe, times: number): void {
 }
 
 test("новый probe находится в статусе unknown без накопленных неудач", () => {
-    const snapshot: ServerSnapshot = createProbe().getSnapshot();
+    const snapshot: ServerProbeSnapshot = createProbe().getSnapshot();
 
     assert.equal(snapshot.status, "unknown");
     assert.equal(snapshot.failedChecks, 0);
@@ -136,7 +136,7 @@ test("счётчик неудач не растёт выше порога", () =
 
 test("повторный успех с другим числом игроков не порождает событий", () => {
     //Событий у probe теперь ровно два — только переходы статуса. Изменение числа игроков
-    //наружу отдаёт ServerMonitor через viewChanged, у probe для этого события нет.
+    //наружу отдаёт ServerMonitor через stateUpdated, у probe для этого события нет.
     const probe = createProbe();
     probe.handleResult(pollSuccess(10));
 

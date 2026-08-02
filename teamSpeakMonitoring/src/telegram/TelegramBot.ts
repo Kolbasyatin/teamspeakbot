@@ -1,12 +1,12 @@
 import type {Bot} from "grammy";
-import type {ServerSnapshot} from "../monitoring/ServerProbe.js";
+import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
 import {formatDuration, intervalToDuration,} from "date-fns";
 import {ru} from "date-fns/locale";
 import {log} from "../logger.js";
 
 //Боту нужно только читать состояние серверов, весь ServerMonitor ему знать незачем.
 export interface StatusSource {
-    getSnapshot(): ServerSnapshot[];
+    getSnapshot(): ServerProbeSnapshot[];
 }
 
 //Аналогично по TeamSpeak: боту нужен только список никнеймов, соединение не его забота.
@@ -63,7 +63,7 @@ export class TelegramBot {
         }
     }
 
-    private showTime(snapshots: ServerSnapshot[]): string {
+    private showTime(snapshots: ServerProbeSnapshot[]): string {
         if (snapshots.length === 0) {
             return "Нет отслеживаемых серверов";
         }

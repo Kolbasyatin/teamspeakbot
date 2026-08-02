@@ -2,19 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {LatestOnlyNotifier} from "./LatestOnlyNotifier.js";
 import type {Notifier, NotificationEventOf} from "./events.js";
-import type {ServerDescriptionView} from "../monitoring/ServerMonitor.js";
 import type {Logger} from "pino";
+import {snapshotFixture} from "../test/serverFixtures.js";
 
-function viewEvent(players: number): NotificationEventOf<"statusViewChanged"> {
-    const view: ServerDescriptionView[] = [
-        {id: 1, name: "Test server", status: "online", players, maxPlayers: 64},
-    ];
-    return {type: "statusViewChanged", view};
+function viewEvent(players: number): NotificationEventOf<"serverStateUpdated"> {
+    return {
+        type: "serverStateUpdated",
+        snapshots: [snapshotFixture({id: 1, name: "Test server", status: "online", players})],
+    };
 }
 
 //Управляемый нотифаер: каждая доставка висит, пока её не отпустят release().
 //Так наложение событий воспроизводится без таймеров и без гонок.
-interface ControllableNotifier extends Notifier<"statusViewChanged"> {
+interface ControllableNotifier extends Notifier<"serverStateUpdated"> {
     delivered: number[];
     release(): void;
     failNext(error: Error): void;
@@ -33,7 +33,7 @@ function createControllable(): ControllableNotifier {
         failNext(error: Error): void {
             failWith = error;
         },
-        async notify(event: NotificationEventOf<"statusViewChanged">): Promise<void> {
+        async notify(event: NotificationEventOf<"serverStateUpdated">): Promise<void> {
             await new Promise<void>(resolve => {
                 unblock = resolve;
             });
@@ -44,7 +44,7 @@ function createControllable(): ControllableNotifier {
                 throw error;
             }
 
-            this.delivered.push(event.view[0]?.players ?? -1);
+            this.delivered.push(event.snapshots[0]?.currentInfo?.players ?? -1);
         },
     } as ControllableNotifier;
 }
@@ -132,8 +132,8 @@ test("отказ доставки пробрасывается наружу, ч�
 });
 
 test("состояние, пришедшее во время упавшей доставки, теряется — и это видно в логе", async () => {
-    //Доставка упала, цикла больше нет, а накопленное состояние забрать некому: ServerMonitor
-    //эмитит viewChanged только при ИЗМЕНЕНИИ, поэтому следующего события может не быть вовсе.
+    //Доставка упала, цикла больше нет, а накопленное состояние забрать некому: дедупликация
+    //снаружи уже записала его как доставленное и следующий такой же stateUpdated проглотит.
     //Тест фиксирует поведение обёртки как есть и проверяет, что потеря не молчаливая.
     //Что потерянное состояние доезжает следующим тиком StateSync — проверяется в StateSync.test.ts
     //(«состояние, потерянное упавшей доставкой, доезжает следующим тиком»).
