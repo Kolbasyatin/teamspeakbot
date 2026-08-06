@@ -2,6 +2,7 @@ import {createConnection, type Pool} from "mariadb";
 import type {Logger} from "pino";
 import type {ServerQueryRole} from "../monitoring/MonitoredServer.js";
 import type {ServerQueryConfig} from "../monitoring/ServerQuery.js";
+import type {TelegramChatType} from "../telegram/TelegramChat.js";
 import {dbConfig} from "../properties.js";
 import {readMigrationFiles} from "../persistence/migrationFiles.js";
 import {Migrator} from "../persistence/Migrator.js";
@@ -54,10 +55,35 @@ export async function migrateTestDatabase(): Promise<void> {
 //DELETE, а не TRUNCATE: на monitored_servers ссылается server_query_sources, и InnoDB
 //не даёт усечь таблицу под внешним ключом. Источники уносит ON DELETE CASCADE.
 //Отключать FOREIGN_KEY_CHECKS нельзя: настройка сессионная, а pool раздаёт разные соединения.
+//
+//Чистятся обе корневые таблицы: подписки ссылаются и на серверы, и на чаты, и уходят каскадом
+//от любой из них. Чат без подписок каскадом не удалится, поэтому своя строка ему нужна.
 export async function truncateTestDatabase(pool: Pool): Promise<void> {
     assertTestDatabase(dbConfig.database);
 
     await pool.query("DELETE FROM monitored_servers");
+    await pool.query("DELETE FROM telegram_chats");
+}
+
+//Чат Telegram в фикстуре. Тип и название со значениями по умолчанию: тестам про подписки
+//безразлично, кто именно подписан, им нужен только существующий chat_id под внешний ключ.
+export async function insertTelegramChatFixture(
+    pool: Pool,
+    fixture: {
+        chatId: number;
+        type?: TelegramChatType;
+        title?: string;
+    },
+): Promise<number> {
+    await pool.query(
+        `
+            INSERT INTO telegram_chats (chat_id, type, title)
+            VALUES (?, ?, ?)
+        `,
+        [fixture.chatId, fixture.type ?? "private", fixture.title ?? null],
+    );
+
+    return fixture.chatId;
 }
 
 //Один источник опроса в фикстуре. role и priority со значениями по умолчанию: тестам,

@@ -101,15 +101,20 @@ teamSpeakMonitoring/         сам сервис
     telegram/              ← адаптер Telegram
       TelegramBot.ts         grammy long-polling, команды бота
       TelegramSender.ts      отправка текста в чат
+      TelegramChat.ts        TelegramChat, TelegramChatType — контракт хранилища для подписчика
+                             (по той же причине, что StoredServer лежит в monitoring/)
     persistence/           ← адаптер БД
       ServerRepository.ts    findAllEnabled(): читает monitored_servers + server_query_sources
                              и отдаёт StoredServer[]. Доменных решений не принимает
+      SubscriptionRepository.ts  чтение и запись подписок: чаты, подписка/отписка и обе стороны
+                             связи — «на что подписан чат» и «кто подписан на сервер»
       parseQueryConfig.ts    чистая функция разбора query_config (вся содержательная логика
                              persistence); проверяется в test:unit, без БД
       Migrator.ts            применяет недостающие миграции; здесь же контракт MigrationStore
       MariaDbMigrationStore.ts  реализация контракта на mariadb: таблица schema_migrations
       migrationFiles.ts      чтение каталога миграций, разбор имён NNN_имя.sql, контрольные суммы
-      ServerRepository.test.ts  интеграционный тест по живой MariaDB
+      ServerRepository.test.ts       интеграционный тест по живой MariaDB
+      SubscriptionRepository.test.ts то же для подписок: хранение, идемпотентность, каскады
     admin/AdminServer.ts   ← адаптер HTTP: node:http, POST-роуты → события
 
     migrations/NNN_*.sql         миграции, применяются по возрастанию номера
@@ -283,9 +288,12 @@ teamSpeakMonitoring/         сам сервис
 
 ## 6. База данных
 
-Две таблицы: сервер и его источники опроса. До миграции 002 таблица была одна, и колонки
-`query_type` / `query_config` лежали прямо в `monitored_servers` — то есть схема утверждала,
-что источник у сервера ровно один.
+Четыре таблицы, двумя парами. **Что мониторим** — сервер и его источники опроса
+(`monitored_servers`, `server_query_sources`). **Кому это нужно** — чат Telegram и его подписки
+(`telegram_chats`, `server_subscriptions`, миграции 005–006).
+
+До миграции 002 таблица была одна, и колонки `query_type` / `query_config` лежали прямо
+в `monitored_servers` — то есть схема утверждала, что источник у сервера ровно один.
 
 ```sql
 CREATE TABLE IF NOT EXISTS monitored_servers
@@ -356,6 +364,59 @@ CREATE TABLE IF NOT EXISTS server_query_sources
 > Настоящая починка — один исполняемый источник схемы: мигратор появился в 6b, дубль DDL в тестах
 > уходит в 6c.
 
+### Подписчики и подписки (миграции 005–006)
+
+```sql
+CREATE TABLE IF NOT EXISTS telegram_chats
+(
+    chat_id    bigint                                          not null primary key,  -- ЗНАКОВЫЙ, см. ниже
+    type       enum ('private','group','supergroup','channel') not null,  -- как в chat.type у Bot API
+    title      varchar(255)                                    null,      -- для групп и каналов
+    created_at timestamp default current_timestamp()           not null,
+    updated_at timestamp default current_timestamp()           not null on update current_timestamp()
+);
+
+CREATE TABLE IF NOT EXISTS server_subscriptions
+(
+    id         bigint unsigned auto_increment primary key,
+    server_id  bigint unsigned                       not null,  -- → monitored_servers.id, ON DELETE CASCADE
+    chat_id    bigint                                not null,  -- → telegram_chats.chat_id, ON DELETE CASCADE
+    created_at timestamp default current_timestamp() not null,
+    UNIQUE (server_id, chat_id)
+);
+```
+
+**Подписчик — чат, а не пользователь.** Bot API адресует сообщения по `chat_id`: для лички он равен
+`user_id`, для группы и канала это отдельное число. Возьми ключом `user_id` — и подписка группы
+не выражается вовсе либо требует второй таблицы и второго пути доставки. С `chat_id` личка, группа
+и канал из `TELEGRAM_CHANNEL_ID` — одна сущность с разным значением `type`.
+
+**`chat_id` знаковый и без `auto_increment`.** У групп и каналов id отрицательные
+(`-1001234567890`), поэтому `unsigned` сломал бы ровно тот случай, ради которого таблица заведена;
+ключ выдаёт Telegram, а не мы. Закреплено тестом в `SubscriptionRepository.test.ts`.
+
+**Колонки `subscriber_type` нет и не планируется.** Вид подписчика ровно один. TeamSpeak-табло
+вторым видом не является: оно показывает подписки одного конкретного чата (того, что лежит
+в `TELEGRAM_CHANNEL_ID`), то есть окно в уже существующие строки. См. `telegram.md`, §5.3.
+
+**`UNIQUE (server_id, chat_id)` — не украшение, а идемпотентность подписки:** двойной тап
+по кнопке «подписаться» не создаёт второй строки, а значит и второго сообщения при падении сервера.
+Репозиторий опирается именно на это ограничение, а не на `SELECT` перед вставкой: проверка перед
+вставкой не атомарна, и два одновременных нажатия её обходят.
+
+**Отдельного индекса по `chat_id` нет** — MariaDB создаёт его сама под внешний ключ, и он же
+обслуживает запрос «мои подписки». Обратный вопрос («кто подписан на этот сервер») закрывает
+`UNIQUE`.
+
+**`updated_at` у подписки нет намеренно:** её заводят и удаляют, но не редактируют. Появится
+настройка (какие события слать, «не беспокоить до») — появится и колонка вместе со своим смыслом.
+
+**`blocked_at` в `telegram_chats` пока нет,** хотя понадобится: её пишет только отправка сообщений
+(403 «bot was blocked by the user»), а адресной отправки ещё не существует. Заводится вместе
+со своим писателем.
+
+### Заведение сервера руками
+
 ```sql
 INSERT INTO monitored_servers (name, game_address, enabled)
 VALUES ('#1 ARMA-RUSSIAN.RU', '37.48.253.41:2001', TRUE);
@@ -401,9 +462,16 @@ curl -X POST http://localhost:3000/internal/force-reload-servers  # измени
 **Тесты используют тот же мигратор.** Своего DDL у них больше нет: `migrateTestDatabase()` читает
 тот же каталог миграций и своим подключением (с `multipleStatements`, как в проде) приводит
 `tsbot_test` к актуальной схеме. Поэтому схема существует ровно в одном месте, и разъехаться копиям
-больше негде. `truncateTestDatabase` чистит только `monitored_servers` (источники уносит `ON DELETE CASCADE`): `schema_migrations` — состояние
-схемы, а не данные теста. Обе функции сначала вызывают `assertTestDatabase`, который отказывается
-работать с базой, чьё имя не кончается на `_test`.
+больше негде. `truncateTestDatabase` чистит две корневые таблицы — `monitored_servers`
+и `telegram_chats`; источники и подписки уносит `ON DELETE CASCADE`. `schema_migrations` не чистится:
+это состояние схемы, а не данные теста. Обе функции сначала вызывают `assertTestDatabase`, который
+отказывается работать с базой, чьё имя не кончается на `_test`.
+
+**Тесты по живой БД идут последовательно** (`--test-concurrency=1` в `test` и `test:repo`).
+`node --test` по умолчанию запускает файлы параллельно, каждый в своём процессе, а база у них одна:
+`DELETE` из одного файла сносит строки, которые вставил другой. Пока в БД лез единственный файл,
+это не проявлялось; со вторым — сразу пять падений в `ServerRepository.test.ts`. `test:unit` флага
+не имеет: он к базе не ходит.
 
 ## 7. Сборка, запуск, деплой
 
@@ -438,10 +506,11 @@ docker compose -f compose.dev.yaml up -d     # MariaDB с базами teamspeak
 
 ```bash
 npm install
-npm run dev        # tsx watch src/main.ts
+npm run dev        # NODE_ENV=dev tsx watch src/main.ts
 npm run build      # tsc -p tsconfig.json → dist/
 npm start          # node dist/main.js
-npm run migrate    # применить недостающие миграции к базе из .env
+npm run migrate    # NODE_ENV=dev; применить недостающие миграции. Прод ходит мимо этого скрипта:
+                   # там node dist/migrate.js прямо в образе (compose.prod.yaml, сервис migrate)
 npm run typecheck  # tsc по прод-конфигу и по tsconfig.test.json (тесты тоже под проверкой)
 npm run test:unit  # логика без БД; сначала автоматически гоняет typecheck
 npm test           # всё, включая интеграционный тест по живой MariaDB
