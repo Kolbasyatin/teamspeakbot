@@ -97,6 +97,10 @@ export interface QuerySourceFixture {
 
 //Возвращает id вставленного сервера: тестам про несколько источников он нужен, чтобы
 //сопоставить выдачу репозитория с тем, что они вставили.
+//
+//subscribers — chat_id тех, кто подписан; чаты должны существовать. Без подписки сервер
+//не опрашивается, поэтому в тестах ServerRepository список пишется ЯВНО: подписан сервер или нет —
+//теперь ровно то, что эти тесты и проверяют, и прятать это в умолчание нельзя.
 export async function insertMonitoredServerFixture(
     pool: Pool,
     fixture: {
@@ -104,6 +108,7 @@ export async function insertMonitoredServerFixture(
         gameAddress: string;
         sources: QuerySourceFixture[];
         enabled?: boolean;
+        subscribers?: number[];
     },
 ): Promise<number> {
     const inserted = await pool.query(
@@ -132,6 +137,16 @@ export async function insertMonitoredServerFixture(
                 JSON.stringify(source.query),
                 source.enabled ?? true,
             ],
+        );
+    }
+
+    for (const chatId of fixture.subscribers ?? []) {
+        await pool.query(
+            `
+                INSERT INTO server_subscriptions (server_id, chat_id)
+                VALUES (?, ?)
+            `,
+            [serverId, chatId],
         );
     }
 

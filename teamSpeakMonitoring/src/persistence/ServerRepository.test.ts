@@ -2,12 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict"
 import {createPool, type Pool} from "mariadb";
 import {dbConfig} from "../properties.js";
-import {insertMonitoredServerFixture, migrateTestDatabase, truncateTestDatabase} from "../test/databaseTestUtils.js";
+import {
+    insertMonitoredServerFixture,
+    insertTelegramChatFixture,
+    migrateTestDatabase,
+    truncateTestDatabase,
+} from "../test/databaseTestUtils.js";
 import {ServerRepository} from "./ServerRepository.js";
 
 //Здесь остаётся только то, что действительно про SQL: какие строки отбираются и как они
 //превращаются в StoredServer. Правила «кто главный источник» и «кого опрашивать нечем»
 //проверяются в buildMonitorConfigs.test.ts — без живой БД, потому что к ней они не относятся.
+
+//Подписчик, от имени которого подписаны серверы в тестах. Кто именно подписан, репозиторию
+//безразлично — он проверяет только факт наличия подписки, — поэтому чат везде один.
+const SUBSCRIBER_CHAT_ID = 100;
 
 let pool: Pool;
 let repository: ServerRepository;
@@ -22,6 +31,36 @@ test.before(async () => {
 
 test.beforeEach(async () => {
     await truncateTestDatabase(pool);
+    await insertTelegramChatFixture(pool, {chatId: SUBSCRIBER_CHAT_ID});
+});
+
+test("сервер без подписок не опрашивается", async () => {
+    //Главное правило этой выдачи: опрашиваем не «всё включённое», а «то, что кому-то нужно».
+    await insertMonitoredServerFixture(pool, {
+        name: "Nobody subscribed",
+        gameAddress: "127.0.0.1:2001",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+    });
+
+    assert.deepEqual(await repository.findMonitored(), []);
+});
+
+test("сервер с несколькими подписчиками приезжает одной строкой", async () => {
+    //EXISTS, а не JOIN: иначе сервер задублировался бы по числу подписчиков и получил бы
+    //столько же probe.
+    await insertTelegramChatFixture(pool, {chatId: 200});
+
+    await insertMonitoredServerFixture(pool, {
+        name: "Popular server",
+        gameAddress: "127.0.0.1:2001",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID, 200],
+    });
+
+    const servers = await repository.findMonitored();
+
+    assert.equal(servers.length, 1);
+    assert.equal(servers[0]?.sources.length, 1);
 });
 
 test("отбираются только включённые серверы", async () => {
@@ -30,6 +69,7 @@ test("отбираются только включённые серверы", as
         gameAddress: "127.0.0.1:2001",
         enabled: true,
         sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID],
     });
 
     await insertMonitoredServerFixture(pool, {
@@ -37,9 +77,10 @@ test("отбираются только включённые серверы", as
         gameAddress: "127.0.0.1:2002",
         enabled: false,
         sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17778, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID],
     });
 
-    const servers = await repository.findAllEnabled();
+    const servers = await repository.findMonitored();
 
     assert.deepEqual(servers.map(server => server.name), ["Enabled server"]);
 });
@@ -53,9 +94,10 @@ test("источник приезжает с разобранным конфиг
             role: "secondary",
             priority: 4,
         }],
+        subscribers: [SUBSCRIBER_CHAT_ID],
     });
 
-    const source = (await repository.findAllEnabled())[0]?.sources[0];
+    const source = (await repository.findMonitored())[0]?.sources[0];
 
     assert.equal(source?.role, "secondary");
     assert.equal(source?.priority, 4);
@@ -80,9 +122,10 @@ test("отключённый источник не попадает в выда�
                 enabled: false,
             },
         ],
+        subscribers: [SUBSCRIBER_CHAT_ID],
     });
 
-    const servers = await repository.findAllEnabled();
+    const servers = await repository.findMonitored();
 
     assert.deepEqual(servers[0]?.sources.map(source => source.query.type), ["a2s"]);
 });
@@ -95,19 +138,42 @@ test("источники отключённого сервера не приез
         gameAddress: "127.0.0.1:2002",
         enabled: false,
         sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17778, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID],
     });
 
     await insertMonitoredServerFixture(pool, {
         name: "Enabled server",
         gameAddress: "127.0.0.1:2001",
         sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID],
     });
 
-    const servers = await repository.findAllEnabled();
+    const servers = await repository.findMonitored();
 
     assert.equal(servers.length, 1);
     assert.equal(servers[0]?.sources.length, 1);
     assert.equal(servers[0]?.sources[0]?.query.type, "a2s");
+});
+
+test("источники неподписанного сервера не приезжают вместе с чужими", async () => {
+    //То же самое, но по второму условию отбора: оно тоже обязано стоять в обоих запросах.
+    await insertMonitoredServerFixture(pool, {
+        name: "Nobody subscribed",
+        gameAddress: "127.0.0.1:2002",
+        sources: [{query: {type: "rest", url: "https://example.com/status", timeout: 1000, fields: {players: "players"}}}],
+    });
+
+    await insertMonitoredServerFixture(pool, {
+        name: "Subscribed",
+        gameAddress: "127.0.0.1:2001",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID],
+    });
+
+    const servers = await repository.findMonitored();
+
+    assert.equal(servers.length, 1);
+    assert.deepEqual(servers[0]?.sources.map(source => source.query.type), ["a2s"]);
 });
 
 test("сервер без включённых источников отдаётся с пустым списком, а не пропадает", async () => {
@@ -118,12 +184,29 @@ test("сервер без включённых источников отдаёт
         sources: [
             {query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}, enabled: false},
         ],
+        subscribers: [SUBSCRIBER_CHAT_ID],
     });
 
-    const servers = await repository.findAllEnabled();
+    const servers = await repository.findMonitored();
 
     assert.equal(servers.length, 1);
     assert.deepEqual(servers[0]?.sources, []);
+});
+
+test("отписка последнего подписчика убирает сервер из опроса", async () => {
+    //Проверяемый результат итерации: список опроса пересобирается из подписок, а не из enabled.
+    const serverId = await insertMonitoredServerFixture(pool, {
+        name: "Server",
+        gameAddress: "127.0.0.1:2001",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID],
+    });
+
+    assert.equal((await repository.findMonitored()).length, 1);
+
+    await pool.query("DELETE FROM server_subscriptions WHERE server_id = ?", [serverId]);
+
+    assert.deepEqual(await repository.findMonitored(), []);
 });
 
 test.after(async () => {

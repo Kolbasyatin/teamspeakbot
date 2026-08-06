@@ -213,7 +213,7 @@ async function main(): Promise<any> {
     //опрашивать нечем» применяет buildMonitorConfigs, а логирует их результат composition root:
     //сама сборка чистая и про логи не знает.
     async function loadMonitorConfigs(): Promise<ServerMonitorConfig[]> {
-        const {configs, notices} = buildMonitorConfigs(await serverRepository.findAllEnabled());
+        const {configs, notices} = buildMonitorConfigs(await serverRepository.findMonitored());
 
         notices.forEach(logBuildNotice);
 

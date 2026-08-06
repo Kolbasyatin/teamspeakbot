@@ -104,8 +104,9 @@ teamSpeakMonitoring/         сам сервис
       TelegramChat.ts        TelegramChat, TelegramChatType — контракт хранилища для подписчика
                              (по той же причине, что StoredServer лежит в monitoring/)
     persistence/           ← адаптер БД
-      ServerRepository.ts    findAllEnabled(): читает monitored_servers + server_query_sources
-                             и отдаёт StoredServer[]. Доменных решений не принимает
+      ServerRepository.ts    findMonitored(): читает monitored_servers + server_query_sources
+                             и отдаёт StoredServer[] — только включённые и только те, на которые
+                             есть хотя бы одна подписка. Доменных решений не принимает
       SubscriptionRepository.ts  чтение и запись подписок: чаты, подписка/отписка и обе стороны
                              связи — «на что подписан чат» и «кто подписан на сервер»
       parseQueryConfig.ts    чистая функция разбора query_config (вся содержательная логика
@@ -415,6 +416,23 @@ CREATE TABLE IF NOT EXISTS server_subscriptions
 (403 «bot was blocked by the user»), а адресной отправки ещё не существует. Заводится вместе
 со своим писателем.
 
+### Подписка определяет, кого опрашивать
+
+`ServerRepository.findMonitored()` отбирает серверы по **двум** условиям: `enabled = 1`
+и наличие хотя бы одной подписки. Вопросы за ними разные и схлопывать их нельзя:
+
+- `enabled` — «виден ли сервер в каталоге», то есть можно ли на него подписаться;
+- подписка — «нужен ли он кому-то прямо сейчас».
+
+Отсюда главное свойство: **каталог из тысячи серверов при трёх подписках даёт три опроса,
+а не тысячу.** Отписался последний подписчик — сервер выпадает из опроса при следующей
+пересборке списка (`POST /internal/reload-servers`).
+
+Условие подписки стоит **в обоих запросах** — и по серверам, и по источникам: источники читаются
+отдельным запросом, поэтому без него приехали бы источники серверов, которых в выдаче нет.
+`EXISTS`, а не `JOIN`: сервер с десятью подписчиками обязан приехать одной строкой, иначе получил бы
+десять probe.
+
 ### Заведение сервера руками
 
 ```sql
@@ -426,10 +444,30 @@ VALUES (LAST_INSERT_ID(), 'primary', 0, 'a2s',
         '{"type":"a2s","host":"37.48.253.41","port":17771,"timeout":5000}', TRUE);
 ```
 
+**Одного сервера мало — на него должен быть подписан хотя бы один чат**, иначе он не опрашивается.
+Подписать канал, который сегодня задан в `TELEGRAM_CHANNEL_ID`:
+
+```sql
+-- 1. Канал как обычный подписчик. chat_id взять из TELEGRAM_CHANNEL_ID (у каналов он отрицательный).
+INSERT INTO telegram_chats (chat_id, type, title)
+VALUES (-1001234567890, 'channel', 'Основной канал')
+ON DUPLICATE KEY UPDATE type = VALUES(type), title = VALUES(title);
+
+-- 2. Подписать его на всё, что сейчас включено. Идемпотентно: повторный запуск не создаёт дублей.
+INSERT INTO server_subscriptions (server_id, chat_id)
+SELECT server.id, -1001234567890
+FROM monitored_servers server
+WHERE server.enabled = 1
+ON DUPLICATE KEY UPDATE server_subscriptions.id = server_subscriptions.id;
+```
+
+Имя колонки в `ON DUPLICATE KEY UPDATE` квалифицировано не для красоты: во втором запросе есть
+алиас `server`, и голое `id = id` MariaDB отвергает как неоднозначное (`ERROR 1052`).
+
 После правки БД дёрнуть admin endpoint:
 
 ```bash
-curl -X POST http://localhost:3000/internal/reload-servers        # добавили/удалили/выключили сервер
+curl -X POST http://localhost:3000/internal/reload-servers        # добавили/удалили/выключили сервер или подписку
 curl -X POST http://localhost:3000/internal/force-reload-servers  # изменили поля существующего сервера
 ```
 

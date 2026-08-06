@@ -24,7 +24,8 @@ type SourceRow = {
 };
 
 //Чтение и только чтение. Здесь нет ни выбора главного источника, ни решения выбросить сервер,
-//у которого источников не осталось: это доменные правила, они живут в buildMonitorConfigs.
+//у которого источников не осталось, ни знания о том, КТО подписан: это доменные правила,
+//они живут в buildMonitorConfigs и в доставке.
 //Граница проходит так: отбор (WHERE) — язык запроса и остаётся тут; вывод чего-либо из прочитанного —
 //нет. Поэтому логгера у репозитория тоже нет: предупреждать не о чем, он ничего не решает.
 //Замена MariaDB на SQLite = другая реализация этого класса, отдающая тот же StoredServer[].
@@ -32,18 +33,31 @@ export class ServerRepository {
     public constructor(private readonly pool: Pool) {
     }
 
-    //Два запроса, а не JOIN: при джойне поля сервера дублируются на каждый источник, а сервер
-    //без единого включённого источника из выдачи исчезает — притом что отдать его наружу нужно,
-    //иначе о нём некому будет предупредить.
-    public async findAllEnabled(): Promise<StoredServer[]> {
+    //Серверы, которые кому-то нужны: включённые И имеющие хотя бы одну подписку.
+    //
+    //Два условия, а не одно, потому что вопросы разные. enabled — «можно ли на него подписаться»,
+    //то есть видимость в каталоге; подписка — «нужен ли он кому-то прямо сейчас». Каталог из тысячи
+    //серверов при трёх подписках даёт три опроса, а не тысячу.
+    //
+    //EXISTS, а не JOIN: сервер с десятью подписчиками должен приехать одной строкой, а не десятью.
+    //Кто именно подписан, здесь не спрашивается вовсе — это вопрос доставки, и отвечает на него
+    //SubscriptionRepository.
+    //
+    //Два запроса, а не JOIN с источниками: при джойне поля сервера дублируются на каждый источник,
+    //а сервер без единого включённого источника из выдачи исчезает — притом что отдать его наружу
+    //нужно, иначе о нём некому будет предупредить.
+    public async findMonitored(): Promise<StoredServer[]> {
         const servers = await this.pool.query<ServerRow[]>(
             `
-                SELECT id,
-                       name,
-                       game_address AS gameAddress
-                FROM monitored_servers
-                WHERE enabled = ?
-                ORDER BY id
+                SELECT server.id,
+                       server.name,
+                       server.game_address AS gameAddress
+                FROM monitored_servers server
+                WHERE server.enabled = ?
+                  AND EXISTS (SELECT 1
+                              FROM server_subscriptions subscription
+                              WHERE subscription.server_id = server.id)
+                ORDER BY server.id
             `,
             [true],
         );
@@ -61,6 +75,9 @@ export class ServerRepository {
     //Без ORDER BY по приоритету намеренно: порядок источников — это порядок слияния данных,
     //то есть доменное правило, и сортирует их buildMonitorConfigs. Будь порядок на совести
     //запроса, забытый ORDER BY в новой реализации молча менял бы то, чьи данные побеждают.
+    //
+    //Условия отбора повторяют findMonitored слово в слово, и это не лишнее: источники читаются
+    //отдельным запросом, поэтому без них сюда приедут источники серверов, которых в выдаче нет.
     private async findEnabledSources(): Promise<Map<number, ServerQuerySource[]>> {
         const rows = await this.pool.query<SourceRow[]>(
             `
@@ -74,6 +91,9 @@ export class ServerRepository {
                          JOIN monitored_servers server ON server.id = source.server_id
                 WHERE source.enabled = ?
                   AND server.enabled = ?
+                  AND EXISTS (SELECT 1
+                              FROM server_subscriptions subscription
+                              WHERE subscription.server_id = server.id)
             `,
             [true, true],
         );
