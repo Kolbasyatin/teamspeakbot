@@ -236,3 +236,331 @@ curl -sS -A "Mozilla/5.0" 'https://www.armahq.com/api/servers?id=4fc5ae8e-de88-4
 Пример сервера взят из выдачи как первый попавшийся с непустой очередью — свои серверы для проверок
 не нужны, у armahq в списке все.
 
+---
+
+# Итерация 2 — проверено 2026-08-02 (вечер)
+
+Продолжение разбора. Закрыты почти все вопросы из §4, найден посерверный эндпоинт armahq
+**без токена** (снимает проблему 29 МБ), и установлены жёсткие ограничения на вариант «клиент
+как источник».
+
+Та же дисциплина: где написано «проверено» — есть команда и её вывод; где «вывод» — это
+рассуждение по косвенным признакам; где «не проверено» — я туда не добрался.
+
+## 7. Что закрылось из §4
+
+| Вопрос | Ответ | Статус |
+|---|---|---|
+| §4.1 Публичный API Bohemia | **Нет.** Ни документации, ни swagger, ни упоминаний. `master.bistudio.com` не существует | проверено |
+| §4.1 `REST_API_Usage` в вики | Это API **для скриптов внутри игры** (класс `RestApi`), а не централизованный API Bohemia. Не то, что искали | проверено |
+| §4.2 BattleMetrics | **Отпал: API стал платным.** Ответ на запрос — `403 {"detail":"Access denied. A subscription is required to use the API."}`. Плюс их поддержка Reforger урезана: нет плейерлиста | проверено |
+| §4.3 Есть ли у Script API доступ к списку серверов | **Да, есть.** Класс `ServerCatalogueApi` | проверено |
+| §4.3 Можно ли запустить без монитора/GPU | **Нет.** Клиента под Linux не существует, headless-режима нет | проверено |
+| §4.4 Токен armahq | **Не нужен** — нашлись открытые эндпоинты | проверено |
+
+Не проверены до сих пор: `gamemonitoring.net`, `gs4u.net`, `play-servers.com`, `top-games.net`.
+После находки §8 они потеряли срочность.
+
+## 8. armahq: посерверные эндпоинты без токена — проверено
+
+Главное практическое за итерацию. Токен требует **только** `/api/servers`; всё остальное открыто.
+
+### 8.1. `/api/analytics` — временной ряд, самое ценное
+
+```
+GET https://www.armahq.com/api/analytics?serverId=<uuid>&hours=<N>
+```
+
+Работает голым `curl`: без токена, без кук, без `Referer`, без `User-Agent`. `Content-Type:
+application/json`, обёртка `{"success":true,"data":[...]}`.
+
+| `hours` | Точек | По проводу | Глубина |
+|---|---|---|---|
+| 1 | 29 | **1.1 КБ** | 1 ч |
+| 24 | 708 | 18 КБ | 24 ч |
+| 168 | 4 930 | 130 КБ | 7 сут |
+| 720 | 21 248 | 555 КБ | 30 сут |
+| 8760 | 21 253 | — | обрезается до 30 сут — это потолок |
+
+Снапшот раз в ~120 с (медиана; разброс 81–251 с). Свежесть последней точки на замере — 21 секунда.
+
+Поля точки:
+
+```
+id, server_id, name, description, player_count, player_count_limit, password_protected,
+scenario_name, region, platform, updated, created_at, snapshot_time,
+queue_size, queue_max_size, queue_avg_wait_time, host_address, session_id
+```
+
+**Очередь здесь есть** — тремя полями, включая среднее время ожидания. Это ровно то, ради чего
+затевался весь разбор (§1), и стоит это 1.1 КБ на запрос вместо 29 МБ.
+
+Чего в аналитике **нет**: `mods`, `scenarioId`, `battlEye`, `joinable`, `official`,
+`directJoinCode`, `supportedGameClientTypes`. За ними — в §8.2.
+
+### 8.2. Страница сервера как JSON — через заголовок `RSC`
+
+```
+GET https://www.armahq.com/servers/<uuid>     # HTML, 10.5 КБ
+GET https://www.armahq.com/servers/<uuid>  -H 'RSC: 1'   # 4.2 КБ, чистый JSON внутри
+```
+
+Сайт на Next.js. С заголовком `RSC: 1` отдаётся flight-пейлоад, внутри которого **неэкранированный**
+JSON после `"initialServer":` — вырезается по балансу фигурных скобок и парсится напрямую, без
+возни с `\"`. 27 полей, полный набор из §2 плюс `joinQueue`.
+
+Для списка `/servers` RSC наоборот **хуже**: 6.2 МБ против 2.9 МБ у обычного HTML (там JSON лежит
+в `initialServers` в SSR-пейлоаде и требует расэкранирования). Обычный HTML-роут `/servers`, кстати,
+тоже отдаёт все 5068 серверов **без токена** — то есть `/api/servers/full` из §2 не единственный путь.
+
+Пагинации и серверных фильтров нет: `?page=`, `?limit=`, `?search=`, `?region=` игнорируются
+полностью, всегда приходит весь дамп. Фильтрация целиком клиентская.
+
+### 8.3. Глобальная аналитика
+
+```
+GET https://www.armahq.com/api/analytics?hours=1     # без serverId, 250 КБ
+```
+
+Агрегат по **5301 серверу**: `serverId`, `name`, `totalSnapshots`, `avgPlayerCount`,
+`maxPlayerCount`, `peakPlayerCount`, **`uptimePercentage`**, `lastSeen`, `region`, `platform`.
+Годится для обнаружения новых серверов и для оценки стабильности чужого сервера.
+
+### 8.4. Оговорка про robots.txt
+
+В `robots.txt` armahq: `Allow: /` для обычных страниц и **`Disallow: /api/`**. Эндпоинты §8.1 и §8.3
+технически открыты, но хозяева обозначили, что автоматику туда не ждут. Решение за zalex; если
+пользуемся — то с внятным `User-Agent` с контактом и без агрессивной частоты. Роут §8.2 (`/servers/<id>`)
+под запрет не подпадает.
+
+Публичного ToS у сайта нет (`/terms`, `/tos` → 404), есть только `/contact`.
+
+## 9. Бэкенд Bohemia: что нашли и где упёрлись
+
+### 9.1. Гипотеза §3 подтверждена их же телеметрией — проверено
+
+В ответе глобальной аналитики (§8.3) armahq отдаёт статус собственного сборщика:
+
+```json
+"collectionStatus": {
+  "servers_collected": 5000,
+  "collection_duration_ms": 7140,
+  "last_collection_time": "1785691805573"
+}
+```
+
+**5000 серверов за 7.1 секунды.** Через A2S это невозможно: UDP round-trip к каждому серверу
+поштучно плюс рейт-лимит 5–10 с на сервер. Значит это одно массовое чтение каталога Bohemia под
+учёткой игрового клиента. Другого объяснения, укладывающегося в эти цифры, нет.
+
+Гипотезу из §3 можно считать закрытой.
+
+### 9.2. Хосты бэкенда — проверено через Certificate Transparency
+
+Публичный реестр сертификатов (`api.certspotter.com`, домен `bistudio.com`) дал 46 хостов,
+из них релевантные:
+
+| Хост | Состояние |
+|---|---|
+| `api-ar-gc.bistudio.com` | GameAPI игрового клиента. `/healthz` → `ok`, корень → `default backend - 404` (nginx-ingress за Cloudflare, кука `x-bi-rid`) |
+| `api-sub-ar.bistudio.com` | тот же ingress, `/healthz` → 200 |
+| `accounts-sub-ar.bistudio.com` | вход Bohemia Account для Reforger, отдаёт HTML логина |
+| `ar-gcp-cdn.bistudio.com`, `api-helios.bistudio.com` | 403 |
+| `servers.bistudio.com` | пустышка — 301 на `bohemia.net`, к спискам серверов отношения не имеет |
+
+Хост `api-ar-gc` всплыл из обсуждений ошибки «Bohemia backend initialization error» — туда стучится
+сам клиент.
+
+### 9.3. Где упёрлись
+
+**Пути не поддаются.** Перебрано ~25 вариантов (`/v1/servers`, `/api/servers`, `/server-browser`,
+`/matchmaking/servers`, `/rooms`, `/swagger`, `/openapi.json` и т.д.) — везде 404. Отвечает только
+`/healthz`. Доступ требует токена аккаунта Bohemia.
+
+**Ложный след, снят:** в поиске всплыл репозиторий `Serega25511s/ArmaReforger-API-Emulator`
+(эмулятор бэкенда — в нём были бы точные пути). Его **не существует**: GitHub API → 404, поиск
+по репозиториям → 0 результатов. Выдумка поисковика, не тратить на него время повторно.
+
+**Community-проектов, читающих мастер-лист, нет ни одного.** Всё, что есть на GitHub по Reforger —
+менеджеры серверов, генераторы конфигов, docker-образы, скрейперы Workshop. Все мониторинги либо
+бьют A2S поштучно, либо отсылают к BattleMetrics.
+
+### 9.4. Как выяснить окончательно — не проверено, это план
+
+Поиском вопрос не решается. Решается перехватом: запустить Reforger, открыть браузер серверов,
+снять трафик (mitmproxy / Wireshark) — увидеть SNI, путь и формат. На своей машине и своём аккаунте
+это законно. Риск: если в клиенте certificate pinning, mitmproxy не встанет и останется только SNI
+без путей.
+
+Даже в случае успеха эндпоинт остаётся недокументированным: Bohemia вправе поменять или закрыть его
+без предупреждения. Как основа для продакшена — плохо; как способ понять картину — годится.
+
+## 10. Клиент как источник (§4.3): что подтвердилось
+
+### 10.1. Script API доступ есть — проверено по документации
+
+В **Enfusion** Script API (не в Arma Reforger API — там этих классов нет) есть:
+
+`ServerCatalogueApi` — дословно *«Catalogue for listing servers from backend»*:
+
+```
+GetMaxSize() / SetSize() / GetSize()      — размер страницы
+RequestPage(BackendCallback, int page)     — загрузить страницу каталога
+RequestOffset(BackendCallback, int offset) — загрузить со смещения
+RequestRefresh(BackendCallback)            — принудительное обновление
+SetFilters(ServerCatalogueFilters)         — фильтры
+GetTotalItemCount()                        — сколько всего есть при текущей конфигурации
+GetCurrentItemCount() / GetOffsetIndex()
+GetAvailablePingSites() / SetOnPingSitesReady() / SetOnPingSitesMeasured()
+GetMode() → EServerCatalogueMode           — Internet / LAN
+```
+
+`ServerInfo` — `GetId`, `GetName`, `GetDescription`, `GetServerType`, `GetMaxPlayers`,
+`GetPlayerCount`, `IsOnline`, `IsVisible`, `IsJoinable`, `IsCrossPlatform`, `IsPasswordProtected`,
+`GetModCount`, `GetWorkshopData`.
+
+`Room` — `Official`, `Region`, `GameVersion`, `Name`, `ScenarioName`, `HostAddress`, `HostType`,
+`OwnerName`, `GameMode`, `PlayerLimit`, `PlayerCount`, **`GetQueueSize`**, **`GetQueueMaxSize`**,
+`GetQueueUserPosition`, `LoadDownloadList` (список модов).
+
+Наружу — через `RestApi` (тот самый класс со страницы `REST_API_Usage`).
+
+### 10.2. Две оговорки в документации — разобраны
+
+> *«User needs to be authenticated (see BackendAuthenticatorApi for more) to be able to send requests.»*
+
+Это просто «залогинен в игре под аккаунтом Bohemia». Никакого партнёрского доступа не требуется.
+
+> *«…automatically if enabled from gamecode (cannot be enabled via scripts)»*
+
+Пугающая фраза, но относится она **только к автоматическому замеру пинга**, а не к каталогу.
+На выкачивание списка не влияет.
+
+Итог: принципиальных блокеров в Script API нет. `GetTotalItemCount()` + `RequestPage()` дают
+постраничный обход всего каталога.
+
+### 10.3. Прямое сопоставление: откуда у armahq поля
+
+Поля каталога — это в основном **ключи `config.json` самого игрового сервера**:
+`supportedGameClientTypes`, `scenarioId`, `playerCountLimit`, `visible`, `battlEye`, `mods[]`,
+`passwordProtected`, `joinQueue`. `platformName` — ОС, на которой крутится серверный бинарник.
+`sessionId`, `directJoinCode`, `pingSiteId` присваивает бэкенд.
+
+Цепочка целиком:
+
+```
+config.json сервера → сервер сам регистрируется и шлёт heartbeat
+   → GameAPI / Server Catalogue Bohemia
+      ├→ внутриигровой браузер серверов (наш путь §10)
+      └→ armahq / battlemetrics (недокументированно, §9.1)
+```
+
+Ключ `operating.lobbyPlayerSynchronise` (по умолчанию `true`) дополнительно шлёт в GameAPI список
+идентичностей игроков вместе с heartbeat — этим лечится расхождение реального и показанного
+числа игроков.
+
+## 11. Ограничения на запуск — проверено, это блокеры
+
+### 11.1. Linux-клиента не существует
+
+Steam API, `appid 1874880`:
+
+```
+platforms: {'windows': True, 'mac': False, 'linux': False}
+Graphics: NVIDIA GTX 1650 / AMD RX 570,  DirectX: Version 12
+```
+
+Под Linux собирается **только dedicated server** — а это не клиент, каталога серверов у него нет
+в принципе. Идея из §4.3 «взять серверный дистрибутив, он легче» — не работает.
+
+### 11.2. Headless-режима нет
+
+Параметра `-headlessClient` (как в Arma 3) в Reforger **нет**. Ни `-noRender`, ни `-nullRenderer` —
+ничего похожего не документировано.
+
+Документированные параметры целиком серверные: `-server`, `-config`, `-bindIP`, `-bindPort`,
+`-a2sIpAddress`, `-a2sPort`, `-nds`, `-nwkResolution`, `-staggeringBudget`, `-logStats`, `-logLevel`,
+`-logAppend`, `-listScenarios`, `-aiLimit`, `-aiPartialSim`, `-loadSessionSave`, `-addons`,
+`-addonsDir`, `-addonDownloadDir`, `-addonTempDir`, `-profile`, `-freezeCheck`,
+`-disableCrashReporter`, `-cfg`.
+
+Клиентско-воркбенчевые, которые существуют: `-gproj`, `-wbModule`, `-run`, `-packAddon`,
+`-publishAddon`, `-scrDefine`, `-debuggerPort`, `-GPUAdapter`.
+
+### 11.3. Что из этого следует
+
+Рабочая конструкция требует **Windows с GPU, работающий круглосуточно**:
+
+```
+Windows + GPU, 24/7, залогинен в Bohemia Account
+   └─ клиентский мод, живёт в главном меню (заходить в игру не нужно)
+        ServerCatalogueApi.SetSize() → RequestPage(cb, n) по всем страницам
+        → ServerInfo / Room: то же, что видит браузер серверов
+        → RestApi.POST() на наш бэкенд
+```
+
+Цена: купленная игра, Windows-машина с видеокартой 24/7, пересборка мода после патчей движка,
+ненулевой риск, что Bohemia сочтёт это злоупотреблением аккаунтом. Мод публиковать в Workshop
+не нужно — грузится локально.
+
+## 12. Что дальше
+
+Обсудить отдельно (zalex, на потом):
+
+1. **Возможности плагина** — что именно мод сможет вытащить и как отдавать наружу.
+2. **Запуск клиента в Linux/Docker** — упирается в §11.1 и §11.2. Направления, которые ещё
+   не проверены: Proton/Wine в контейнере, GPU passthrough, облачные GPU-инстансы,
+   виртуальный дисплей. Отдельный вопрос — как на Wine отреагирует античит и не сломает ли это
+   вход в Bohemia Account.
+
+Дешёвый решающий эксперимент **до** любой инфраструктуры: написать мод и запустить на обычном
+десктопе, проверив ровно три вещи —
+
+- возвращает ли `RequestPage` весь каталог, а не первую страницу с потолком;
+- работает ли `RestApi.POST` из главного меню (а не только из запущенной миссии);
+- совпадает ли набор полей `ServerInfo`/`Room` с тем, что мы видели у armahq.
+
+Три «да» — дальше это вопрос железа. Хоть одно «нет» — вариант отпадает, и это выяснится за день,
+а не за месяц.
+
+Промежуточное решение на это время: §8.1 закрывает исходную задачу (очередь) уже сейчас и требует
+только строки в `server_query_sources` — кода писать не придётся, как и планировалось в §1.
+
+## 13. Как воспроизвести проверки итерации 2
+
+```bash
+S=34008e3e-9a0c-4be0-b94f-c7f3cb547626   # [RU] #1 | ARMA-RUSSIAN.RU | CONFLICT EVERON
+
+# временной ряд с очередью — 1.1 КБ, без токена и без заголовков
+curl -s --compressed "https://www.armahq.com/api/analytics?serverId=$S&hours=1"
+
+# глубина истории (потолок — 30 суток)
+curl -s --compressed "https://www.armahq.com/api/analytics?serverId=$S&hours=720" | wc -c
+
+# глобальный агрегат по 5301 серверу + collectionStatus сборщика
+curl -s --compressed "https://www.armahq.com/api/analytics?hours=1" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['collectionStatus'])"
+
+# страница сервера как чистый JSON
+curl -s --compressed -H "RSC: 1" "https://www.armahq.com/servers/$S"
+
+# бэкенд Bohemia: живой, но безответный
+curl -s https://api-ar-gc.bistudio.com/healthz    # ok
+curl -s https://api-ar-gc.bistudio.com/v1/servers # default backend - 404
+
+# хосты Bohemia через Certificate Transparency
+curl -s "https://api.certspotter.com/v1/issuances?domain=bistudio.com&include_subdomains=true&expand=dns_names"
+
+# платформы клиента
+curl -s "https://store.steampowered.com/api/appdetails?appids=1874880" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['1874880']['data']['platforms'])"
+```
+
+Замечание по `id`: у сервера `arma-russian.ru #1` за 30 дней истории засветились **два разных IP**
+(`37.48.253.41:2001` — 21 242 точки и `212.22.85.65:2001` — 6 точек), причём `host_address`
+и `session_id` менялись синхронно. **Ключеваться надо на UUID, а не на IP.**
+
+И отдельно: `session_id` **не годится для детекции рестартов** — за 30 дней он сменился дважды
+при 21 242 точках, то есть переживает обычные перезапуски. Рестарты ловить по обвалу
+`player_count` или по дыре в снапшотах.
+
