@@ -5,6 +5,7 @@ import {RestQuerier} from "./queriers/RestQuerier.js";
 import {log} from "./logger.js";
 import {AdminServer} from "./admin/AdminServer.js";
 import {ServerRepository} from "./persistence/ServerRepository.js";
+import {SubscriptionRepository} from "./persistence/SubscriptionRepository.js";
 import {createPool} from "mariadb";
 import {
     dbConfig,
@@ -18,6 +19,8 @@ import {
 import {notifierConfig} from "./notifierConfig.js";
 import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js";
 import {subscribe, type NotificationSubscription} from "./notifications/events.js";
+import {PerSubscriberNotifier} from "./notifications/PerSubscriberNotifier.js";
+import {SubscribedOnlyNotifier} from "./notifications/SubscribedOnlyNotifier.js";
 import {TeamSpeakChannelNotifier} from "./notifications/TeamSpeakChannelNotifier.js";
 import {LatestOnlyNotifier} from "./notifications/LatestOnlyNotifier.js";
 import {StateSync} from "./notifications/StateSync.js";
@@ -27,7 +30,7 @@ import {LogNotifier, summarizeForLog} from "./notifications/LogNotifier.js";
 import {ChannelDescriptionRenderer} from "./teamspeak/ChannelDescriptionRenderer.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TelegramSender} from "./telegram/TelegramSender.js";
-import {TelegramStatusNotifier} from "./notifications/TelegramStatusNotifier.js";
+import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
 import {Bot} from "grammy";
@@ -59,6 +62,15 @@ function logBuildNotice(notice: BuildNotice): void {
     }
 }
 
+//Владелец табло TeamSpeak — чат, а чаты адресуются числовым id. @username каналу годится
+//для отправки, но подписки лежат по числу, поэтому владельцем табло он быть не может:
+//в этом случае фильтра нет вовсе, и табло показывает всё опрашиваемое, как до подписок.
+function parseBoardChatId(channelId: string): number | undefined {
+    const parsed = Number(channelId);
+
+    return channelId !== "" && Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
 //БД может подняться позже нас (в compose она стартует рядом), поэтому первое чтение серверов
 //не должно ронять процесс. Суммарно даёт около 90 секунд на готовность MariaDB.
 const startupDbRetry = {
@@ -79,9 +91,18 @@ async function main(): Promise<any> {
     const teamSpeakClient = new TeamSpeakClient(teamSpeakConnection);
     const pool = createPool(dbConfig);
     const serverRepository = new ServerRepository(pool);
+    const subscriptionRepository = new SubscriptionRepository(pool);
     const adminWebServer = new AdminServer({
         port: syncConfig.port
     })
+
+    //Чей список показывает табло в TeamSpeak. Отдельной настройки нет намеренно: табло — это окно
+    //в подписки канала, который и так задан в TELEGRAM_CHANNEL_ID (telegram.md, §5.3).
+    //@username каналу тоже допустим для отправки, но подписки хранятся по числовому chat_id,
+    //поэтому владельцем табло он быть не может.
+    const boardChatId = parseBoardChatId(tgProperties.channelId);
+    //Обновляется вместе со списком опроса — тем же вызовом, что пересобирает мониторинг.
+    let boardServerIds: ReadonlySet<number> = new Set();
 
     //Telegram доступен только при непустом токене: grammy бросает "Empty token!" в конструкторе.
     //Один Bot на процесс — его делят команды бота и отправка уведомлений.
@@ -122,35 +143,64 @@ async function main(): Promise<any> {
             log,
         );
 
+        //Монитор опрашивает всё, на что подписан хоть кто-то, поэтому в событие приезжают и чужие
+        //серверы. Табло показывает только список СВОЕГО чата — того, что задан в TELEGRAM_CHANNEL_ID.
+        //Фильтр стоит СНАРУЖИ дедупликации намеренно: её ключ считается по snapshots, и попади
+        //в него чужие серверы — описание переписывалось бы по чужому поводу (см. SubscribedOnlyNotifier).
+        //
+        //Владельца нет — табло пустое, а не «показываем всё»: у табло всегда есть чей-то список,
+        //и второго смысла у него быть не должно. Пустой набор здесь не особый случай, он получается
+        //сам собой: boardServerIds остаётся пустым, если чат не задан.
+        const showList = (): ReadonlySet<number> => boardServerIds;
+
         //Ячейка одна на всё табло: описание пишется во все каналы одинаковым текстом, различать
         //нечего. Ключ — ТЕКСТ описания без отметки времени: вопрос «лезть ли в TeamSpeak»
         //эквивалентен вопросу «изменится ли то, что увидит человек». Отсюда renderBody, а не
         //render: время в ключе меняется каждую секунду и убило бы дедупликацию совсем.
-        subscriptions.push(subscribe("serverStateUpdated", "teamspeak", new ChangesOnlyNotifier(
-            channelBoard,
-            () => "channelDescription",
-            event => ChannelDescriptionRenderer.renderBody(event.snapshots),
+        subscriptions.push(subscribe("serverStateUpdated", "teamspeak", new SubscribedOnlyNotifier(
+            new ChangesOnlyNotifier(
+                channelBoard,
+                () => "channelDescription",
+                event => ChannelDescriptionRenderer.renderBody(event.snapshots),
+            ),
+            showList,
         )));
         //А это — мимо дедупликации, безусловной записью: так откатывается правка описания,
         //сделанная в TeamSpeak руками. О ней мы узнать не можем, поэтому и молчать не имеем права.
-        subscriptions.push(subscribe("serverStateRepublished", "teamspeak", channelBoard));
+        //Фильтр нужен и здесь: без него принудительная публикация раз в минуту рисовала бы
+        //полный список, затирая отфильтрованное табло.
+        subscriptions.push(subscribe("serverStateRepublished", "teamspeak",
+            new SubscribedOnlyNotifier(channelBoard, showList)));
+
+        if (boardChatId === undefined) {
+            log.warn("TEAMSPEAK_NOTIFIER включен, но TELEGRAM_CHANNEL_ID не задан числом — у табло нет владельца, описание канала будет пустым");
+        }
     }
 
     if (notifierConfig.telegram && telegramApi) {
-        const telegramSender = new TelegramSender(telegramApi, tgProperties.channelId);
-        //Один нотифаер на оба события: текст берётся из таблицы внутри него.
-        //Канал Telegram — журнал, а не табло, поэтому обёртка обратная TeamSpeak'у: отправляем
-        //только при расхождении с последним успешно доставленным статусом этого сервера.
-        //Без неё периодическая синхронизация дала бы 1440 сообщений «is online» в сутки;
-        //с ней упавшая отправка повторяется следующим тиком, а совпадающая молчит.
+        //Один на процесс: адресат теперь параметр send(), а лимит Bot API общий на бота.
+        const telegramSender = new TelegramSender(telegramApi);
+
+        //Событие про сервер — одно, адресатов у него столько, сколько подписчиков.
+        //Рассылка стоит СНАРУЖИ дедупликации, а не внутри: у каждого чата своя память доставок,
+        //поэтому отказ одному не заставляет повторять сообщение всем остальным.
         //
-        //Ячейка на каждый сервер, ключ — тип события. Один экземпляр обёртки на ОБА события:
-        //подпишешь два разных — у каждой будет своя память, и повтор «is online» после offline
-        //не уйдёт никогда. Тип в subject класть по той же причине нельзя.
-        const telegramStatusNotifier = new ChangesOnlyNotifier(
-            new TelegramStatusNotifier(telegramSender),
-            event => String(event.snapshot.config.id),
-            event => event.type,
+        //Внутри — то, что было и раньше, только с адресатом. Канал Telegram это журнал, а не табло,
+        //поэтому обёртка обратная TeamSpeak'у: отправляем только при расхождении с последним
+        //успешно доставленным статусом этого сервера. Ячейка на каждый сервер, ключ — тип события.
+        //Один экземпляр обёртки на ОБА события: подпишешь два разных — у каждой будет своя память,
+        //и повтор «is online» после offline не уйдёт никогда. Тип в subject класть по той же причине
+        //нельзя. Здесь это обеспечено тем, что notifierFor вызывается один раз на чат.
+        const telegramStatusNotifier = new PerSubscriberNotifier<ServerStatusEventType>(
+            subscriptionRepository,
+            event => event.snapshot.config.id,
+            chatId => new ChangesOnlyNotifier(
+                //Привязка адресата — здесь, в composition root: нотифаеру по-прежнему нужна одна
+                //операция «отправить текст», и про chatId он не знает.
+                new TelegramStatusNotifier({send: text => telegramSender.send(chatId, text)}),
+                event => String(event.snapshot.config.id),
+                event => event.type,
+            ),
         );
 
         subscriptions.push(subscribe("serverOnline", "telegram", telegramStatusNotifier));
@@ -220,11 +270,25 @@ async function main(): Promise<any> {
         return configs;
     }
 
+    //Список табло перечитывается тем же вызовом, что и список опроса: подписка меняет оба сразу,
+    //и второго механизма обновления заводить незачем. В памяти он держится потому, что
+    //serverStateUpdated приходит после каждого опроса каждого сервера — запрос в БД на событие
+    //означал бы десятки запросов в секунду.
+    async function loadBoardServerIds(): Promise<void> {
+        if (boardChatId === undefined) {
+            return;
+        }
+
+        boardServerIds = new Set(await subscriptionRepository.findSubscribedServerIds(boardChatId));
+    }
+
     async function syncMonitorServersFromRepository(): Promise<void> {
+        await loadBoardServerIds();
         monitor.syncServers(await loadMonitorConfigs());
     }
 
     async function forceSyncMonitorServersFromRepository(): Promise<void> {
+        await loadBoardServerIds();
         monitor.forceSync(await loadMonitorConfigs());
     }
 

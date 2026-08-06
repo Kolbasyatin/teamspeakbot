@@ -87,6 +87,12 @@ teamSpeakMonitoring/         сам сервис
                              не запоминается и повторяется следующим тиком
       TelegramStatusNotifier.ts  переходы статуса в Telegram; текст — из таблицы
                              Record<событие, текст>; здесь же интерфейс MessageSender
+      PerSubscriberNotifier.ts  обёртка «каждому подписчику своё»: одно событие про сервер →
+                             доставка каждому подписчику, у каждого своя цепочка и своя память
+                             дедупликации. Транспорта не знает; здесь же SubscriberSource
+      SubscribedOnlyNotifier.ts  обёртка-фильтр: оставляет в событии только снапшоты серверов
+                             своего чата. Ставится СНАРУЖИ ChangesOnlyNotifier — иначе чужой
+                             сервер попадает в ключ дедупликации табло
 
     queriers/              ← адаптеры опроса
       A2sQuerier.ts          @callowayisweird/source-query (единственный, кто знает эту библиотеку)
@@ -100,7 +106,8 @@ teamSpeakMonitoring/         сам сервис
                              (ключ дедупликации). Проекция снапшота в строки живёт здесь
     telegram/              ← адаптер Telegram
       TelegramBot.ts         grammy long-polling, команды бота
-      TelegramSender.ts      отправка текста в чат
+      TelegramSender.ts      отправка текста: send(chatId, text). Один на процесс — лимит Bot API
+                             (~30 сообщений/сек) общий на бота, поэтому и очередь будет здесь
       TelegramChat.ts        TelegramChat, TelegramChatType — контракт хранилища для подписчика
                              (по той же причине, что StoredServer лежит в monitoring/)
     persistence/           ← адаптер БД
@@ -135,7 +142,7 @@ teamSpeakMonitoring/         сам сервис
                      ┌──────────────────┐   StoredServer[]   ┌──────────────────────┐
    MariaDB ──────────│ ServerRepository │───────────────────▶│ buildMonitorConfigs  │
                      └──────────────────┘  только чтение     │ порядок, главный,    │
-                              findAllEnabled()               │ отсев + notices      │
+                        findMonitored(): enabled + подписка   │ отсев + notices      │
                                                              └──────────┬───────────┘
    POST /internal/                          ServerMonitorConfig[]       ▼
    reload-servers    ┌──────────────────┐   sync    ┌──────────────┐
@@ -152,12 +159,16 @@ teamSpeakMonitoring/         сам сервис
                  emit(снапшоты всех)     ┌────────────────────────┐
                    stateUpdated ────────▶│ NotificationDispatcher │ раздача по типу события
                                          └───────────┬────────────┘
-                         serverStateUpdated ─────────┼──▶ ChangesOnlyNotifier(по тексту описания)
-                                                     │      └▶ LatestOnly ─▶ TeamSpeakChannelNotifier ─▶ TS6
-                      serverStateRepublished ────────┼──▶ LatestOnly ─▶ тот же нотифаер, МИМО дедупликации
+                         serverStateUpdated ─────────┼──▶ SubscribedOnly(серверы чата-владельца)
+                                                     │      └▶ ChangesOnly(по тексту описания)
+                                                     │          └▶ LatestOnly ─▶ TeamSpeakChannelNotifier ─▶ TS6
+                      serverStateRepublished ────────┼──▶ SubscribedOnly ─▶ LatestOnly ─▶ тот же нотифаер,
+                                                     │                                    МИМО дедупликации
                                                      ├──▶ ChangesOnlyNotifier(по выжимке) ─▶ LogNotifier
-                      serverOnline/Offline ──────────┴──▶ ChangesOnlyNotifier ─▶ TelegramStatusNotifier
-                                                            (молчит, если то же состояние уже доставлено)
+                      serverOnline/Offline ──────────┴──▶ PerSubscriber(кто подписан на сервер)
+                                                            └▶ на КАЖДОГО: ChangesOnly ─▶ TelegramStatusNotifier
+                                                               (своя память у каждого чата: отказ одному
+                                                                не заставляет повторять всем)
 
    Scheduler (свой,   ┌───────────┐       getSnapshot()         ┌─────────────┐
    в composition ────▶│ StateSync │◀────────────────────────────│ServerMonitor│
@@ -269,7 +280,7 @@ teamSpeakMonitoring/         сам сервис
 | `TEAMSPEAK_NOTIFIER` | `false` | вкл. обновление описания канала |
 | `LOG_NOTIFIER` | `true` | вкл. вывод события в лог |
 | `TELEGRAM_NOTIFIER` | `false` | вкл. Telegram-уведомления о статусах |
-| `TELEGRAM_TOKEN` / `TELEGRAM_CHANNEL_ID` | `""` | бот и целевой чат |
+| `TELEGRAM_TOKEN` / `TELEGRAM_CHANNEL_ID` | `""` | бот и **владелец табло TeamSpeak**: адресатов уведомлений задают подписки, а этот чат определяет, чьи подписки показывает описание канала. Не число (пусто или `@username`) — владельца нет, табло пустое, в лог `warn` |
 | `DB_HOST` | `127.0.0.11` | MariaDB (в compose — имя сервиса, напр. `mariadb`) |
 | `DB_PORT` | `3306` | |
 | `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `teamspeak` / `""` / `tsbot` | |
