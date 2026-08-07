@@ -209,6 +209,75 @@ test("отписка последнего подписчика убирает с
     assert.deepEqual(await repository.findMonitored(), []);
 });
 
+test("каталог показывает включённые серверы, в том числе без подписок", async () => {
+    //Отбор здесь ДРУГОЙ, чем у findMonitored, и это главное свойство каталога: подписаться
+    //не на что, если показывать только уже подписанное.
+    await insertMonitoredServerFixture(pool, {
+        name: "Никто не подписан",
+        gameAddress: "127.0.0.1:2001",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+    });
+
+    await insertMonitoredServerFixture(pool, {
+        name: "Скрытый",
+        gameAddress: "127.0.0.1:2002",
+        enabled: false,
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17778, timeout: 1000}}],
+    });
+
+    const servers = await repository.findCatalogPage("", 10, 0);
+
+    assert.deepEqual(servers.map(server => server.name), ["Никто не подписан"]);
+    assert.equal(await repository.countCatalog(""), 1);
+});
+
+test("каталог ищет по части имени и считает найденное", async () => {
+    for (const name of ["ARMA первый", "ARMA второй", "Другой"]) {
+        await insertMonitoredServerFixture(pool, {
+            name,
+            gameAddress: "127.0.0.1:2001",
+            sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+        });
+    }
+
+    assert.deepEqual(
+        (await repository.findCatalogPage("ARMA", 10, 0)).map(server => server.name),
+        ["ARMA второй", "ARMA первый"],
+    );
+    assert.equal(await repository.countCatalog("ARMA"), 2);
+});
+
+test("каталог режется на страницы в порядке имён", async () => {
+    for (const name of ["В", "А", "Б"]) {
+        await insertMonitoredServerFixture(pool, {
+            name,
+            gameAddress: "127.0.0.1:2001",
+            sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+        });
+    }
+
+    assert.deepEqual((await repository.findCatalogPage("", 2, 0)).map(server => server.name), ["А", "Б"]);
+    assert.deepEqual((await repository.findCatalogPage("", 2, 2)).map(server => server.name), ["В"]);
+});
+
+test("серверы по списку id читаются даже отключённые", async () => {
+    //Сервер могли скрыть из каталога уже после подписки — человек обязан увидеть его в своём
+    //списке, хотя бы чтобы отписаться.
+    const hidden = await insertMonitoredServerFixture(pool, {
+        name: "Скрытый",
+        gameAddress: "127.0.0.1:2002",
+        enabled: false,
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17778, timeout: 1000}}],
+    });
+
+    assert.deepEqual((await repository.findByIds([hidden])).map(server => server.name), ["Скрытый"]);
+});
+
+test("пустой список id не роняет запрос", async () => {
+    //IN () — синтаксическая ошибка, а не пустая выдача.
+    assert.deepEqual(await repository.findByIds([]), []);
+});
+
 test.after(async () => {
     await pool.end();
 });

@@ -4,6 +4,7 @@ import type {
     StoredServer,
 } from "../monitoring/MonitoredServer.js";
 import type {ServerQueryConfig} from "../monitoring/ServerQuery.js";
+import type {CatalogServer} from "../catalog/CatalogServer.js";
 import {type Pool} from "mariadb";
 import {parseQueryConfig} from "./parseQueryConfig.js";
 
@@ -12,6 +13,10 @@ type ServerRow = {
     id: number | bigint;
     name: string;
     gameAddress: string;
+};
+
+type CountRow = {
+    total: number | bigint;
 };
 
 type SourceRow = {
@@ -72,6 +77,72 @@ export class ServerRepository {
         }));
     }
 
+    //Каталог: страница серверов, из которых человек выбирает, на что подписаться.
+    //
+    //Здесь ДРУГОЙ отбор, чем в findMonitored, и это не оплошность: в каталоге показываются все
+    //включённые серверы, в том числе те, на которые никто пока не подписан, — иначе подписаться
+    //было бы не на что. То самое разделение смыслов: enabled — про видимость, подписка — про опрос.
+    //
+    //Сортировка по имени, а не по id: человек ищет глазами по названию. id добивает ничью,
+    //чтобы страницы не разъезжались при одинаковых именах.
+    public async findCatalogPage(search: string, limit: number, offset: number): Promise<CatalogServer[]> {
+        const rows = await this.pool.query<ServerRow[]>(
+            `
+                SELECT id,
+                       name,
+                       game_address AS gameAddress
+                FROM monitored_servers
+                WHERE enabled = ?
+                  AND (? = '' OR name LIKE CONCAT('%', ?, '%'))
+                ORDER BY name, id
+                LIMIT ? OFFSET ?
+            `,
+            [true, search, search, limit, offset],
+        );
+
+        return rows.map(toCatalogServer);
+    }
+
+    //Сколько всего в каталоге по этому запросу. Нужен постранично: без общего числа
+    //не нарисовать «страница 2 из 5» и не понять, показывать ли кнопку «дальше».
+    public async countCatalog(search: string): Promise<number> {
+        const rows = await this.pool.query<CountRow[]>(
+            `
+                SELECT COUNT(*) AS total
+                FROM monitored_servers
+                WHERE enabled = ?
+                  AND (? = '' OR name LIKE CONCAT('%', ?, '%'))
+            `,
+            [true, search, search],
+        );
+
+        return Number(rows[0]?.total ?? 0);
+    }
+
+    //Серверы по списку id — для показа чужих подписок именами, а не номерами.
+    //Условия enabled здесь НЕТ намеренно: сервер могли скрыть из каталога уже после подписки,
+    //и человек обязан увидеть его в своём списке, хотя бы чтобы отписаться.
+    public async findByIds(ids: readonly number[]): Promise<CatalogServer[]> {
+        //IN () — синтаксическая ошибка, а не пустая выдача. Проверка обязательна.
+        if (ids.length === 0) {
+            return [];
+        }
+
+        const rows = await this.pool.query<ServerRow[]>(
+            `
+                SELECT id,
+                       name,
+                       game_address AS gameAddress
+                FROM monitored_servers
+                WHERE id IN (?)
+                ORDER BY name, id
+            `,
+            [ids],
+        );
+
+        return rows.map(toCatalogServer);
+    }
+
     //Без ORDER BY по приоритету намеренно: порядок источников — это порядок слияния данных,
     //то есть доменное правило, и сортирует их buildMonitorConfigs. Будь порядок на совести
     //запроса, забытый ORDER BY в новой реализации молча менял бы то, чьи данные побеждают.
@@ -116,4 +187,13 @@ export class ServerRepository {
 
         return byServer;
     }
+}
+
+//bigint у драйвера — деталь протокола, домену он не нужен. Тот же перевод, что и в остальных чтениях.
+function toCatalogServer(row: ServerRow): CatalogServer {
+    return {
+        id: Number(row.id),
+        name: row.name,
+        gameAddress: row.gameAddress,
+    };
 }

@@ -1,83 +1,72 @@
-import type {Bot} from "grammy";
-import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
-import {formatDuration, intervalToDuration,} from "date-fns";
-import {ru} from "date-fns/locale";
+import type {Bot, BotError} from "grammy";
+import {TelegramSender} from "./TelegramSender.js";
 import {log} from "../logger.js";
 
-//Боту нужно только читать состояние серверов, весь ServerMonitor ему знать незачем.
-export interface StatusSource {
-    getSnapshot(): ServerProbeSnapshot[];
+//Набор команд: знает только, как повесить свои обработчики на бота. Зависимости у каждого набора
+//свои — командам состояния нужен монитор, командам подписок репозитории, — и сваливать их
+//в один конструктор незачем.
+//
+//Форма та же, что у уведомлений: NotificationDispatcher владеет доставкой, а список подписок
+//собирается в composition root. Здесь ровно так же — владелец один, список снаружи.
+export interface BotCommands {
+    register(bot: Bot): void;
 }
 
-//Аналогично по TeamSpeak: боту нужен только список никнеймов, соединение не его забота.
-export interface OnlineNicknamesSource {
-    listOnlineNicknames(): Promise<string[]>;
-}
-
+//Единственный владелец всего телеграмного: сам Bot, наборы команд, отправка и жизненный цикл.
+//
+//ВХОДЯЩЕЕ И ИСХОДЯЩЕЕ ЖИВУТ ПО РАЗНЫМ ПРАВИЛАМ, и это главное, что стоит знать про этот класс:
+//
+//  входящее (команды, кнопки) работает ТОЛЬКО после start(): start — это запуск long polling,
+//    то есть цикла getUpdates. Без него обработчики зарегистрированы, но апдейты никто не забирает,
+//    и бот просто молчит в ответ на команды;
+//  исходящее (sender) работает ВСЕГДА: sendMessage — обычный HTTP-запрос к Bot API,
+//    long polling ему не нужен. Уведомления уходят и до start(), и после stop().
+//
+//Раньше это было неочевидно, потому что TelegramSender создавался в main отдельно от бота
+//и выглядел независимой сущностью. Он и есть независимая — но принадлежит тому же боту,
+//поэтому живёт здесь.
 export class TelegramBot {
-    //Bot создаётся в composition root и делится с отправкой уведомлений: один long-polling
-    //и один api-клиент на процесс.
+    //Исходящая сторона. Публичная, потому что её адресует не бот, а уведомления: кому слать —
+    //решают подписки, и знать об этом боту незачем.
+    public readonly sender: TelegramSender;
+
+    //Bot создаётся в composition root: один long polling и один api-клиент на процесс.
     constructor(
         private readonly bot: Bot,
-        private readonly statusSource: StatusSource,
-        private readonly nicknamesSource: OnlineNicknamesSource
+        commands: readonly BotCommands[],
     ) {
-        this.registerCommands();
+        this.sender = new TelegramSender(bot);
+
+        for (const set of commands) {
+            set.register(bot);
+        }
+
+        //Обязателен, а не «на всякий случай». Без него ЛЮБАЯ ошибка внутри обработчика для grammy
+        //фатальна: она гасит long polling («Stopping bot»), после чего падает и сам getUpdates.
+        //Снаружи это выглядит как «мониторинг работает, а бот молча умер до перезапуска процесса» —
+        //поймано на отладке T4a, когда моргнула сеть и sendMessage не прошёл.
+        //
+        //Одинаково в деве и в проде: разное поведение окружений означает, что отлаживаешь одно,
+        //а работает другое. Точка останова для отладчика — здесь же: сюда приходит и ошибка,
+        //и контекст апдейта, на котором она случилась.
+        bot.catch((error: BotError) => {
+            log.error(
+                {error: error.error, updateId: error.ctx.update.update_id, chatId: error.ctx.chatId},
+                "Ошибка при обработке апдейта Telegram",
+            );
+        });
     }
 
+    //start() возвращает промис, который разрешится только при остановке бота, поэтому его нельзя
+    //ждать — иначе запуск приложения из него не вернётся. Но и голый void оставлять нельзя:
+    //отказ самого long polling ушёл бы в unhandled rejection и не попал бы в лог вообще.
     public start(): void {
-        void this.bot.start();
+        void this.bot.start().catch((error: unknown) => {
+            log.error({error}, "Long polling Telegram остановлен ошибкой — бот не принимает команды");
+        });
     }
 
     public async stop(): Promise<void> {
         await this.bot.stop();
-    }
-
-    private registerCommands(): void {
-        this.bot.command("time", async ctx => {
-            await ctx.reply(this.showTime(this.statusSource.getSnapshot()));
-        })
-        this.bot.command("who", async ctx => {
-            await ctx.reply(await this.showWho());
-        })
-        this.bot.command("id", async ctx => {
-            await ctx.reply(`chatId: ${ctx.chatId}`);
-        });
-    }
-
-    private async showWho(): Promise<string> {
-        try {
-            const nicknames = await this.nicknamesSource.listOnlineNicknames();
-
-            if (nicknames.length === 0) {
-                return "В TeamSpeak никого нет";
-            }
-
-            return [
-                `В TeamSpeak (${nicknames.length}):`,
-                ...nicknames.map(nickname => `• ${nickname}`),
-            ].join("\n");
-        } catch (error) {
-            log.error({error}, "Не удалось получить список клиентов TeamSpeak");
-            return "Не удалось получить список из TeamSpeak";
-        }
-    }
-
-    private showTime(snapshots: ServerProbeSnapshot[]): string {
-        if (snapshots.length === 0) {
-            return "Нет отслеживаемых серверов";
-        }
-
-        return snapshots
-            .map(server => {
-                const now = new Date();
-                const duration = formatDuration(intervalToDuration({start: server.statusSince, end: now}), {
-                    locale: ru,
-                    format: ["hours", "minutes", "seconds"],
-                    zero: true
-                })
-                return `${server.config.name}: ${server.status}, ${duration}`;
-            })
-            .join("\n");
     }
 }

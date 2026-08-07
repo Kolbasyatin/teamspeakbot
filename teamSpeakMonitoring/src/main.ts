@@ -29,7 +29,8 @@ import {type ScheduledTask, Scheduler} from "./monitoring/Scheduler.js";
 import {LogNotifier, summarizeForLog} from "./notifications/LogNotifier.js";
 import {ChannelDescriptionRenderer} from "./teamspeak/ChannelDescriptionRenderer.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
-import {TelegramSender} from "./telegram/TelegramSender.js";
+import {StatusCommands} from "./telegram/StatusCommands.js";
+import {SubscriptionCommands} from "./telegram/SubscriptionCommands.js";
 import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
@@ -107,10 +108,17 @@ async function main(): Promise<any> {
     //Telegram доступен только при непустом токене: grammy бросает "Empty token!" в конструкторе.
     //Один Bot на процесс — его делят команды бота и отправка уведомлений.
     const telegramApi = tgProperties.token ? new Bot(tgProperties.token) : undefined;
-    //Команды (/time, /who, /id) не зависят от TELEGRAM_NOTIFIER: тот флаг управляет только
-    //уведомлениями о статусах серверов.
+    //Наборы команд перечислены здесь, потому что зависимости у них разные и живут они здесь же.
+    //Сами команды не зависят от TELEGRAM_NOTIFIER: тот флаг управляет только уведомлениями.
     const telegramBot = telegramApi
-        ? new TelegramBot(telegramApi, monitor, teamSpeakClient)
+        ? new TelegramBot(telegramApi, [
+            new StatusCommands(monitor, teamSpeakClient),
+            new SubscriptionCommands(serverRepository, subscriptionRepository, () => {
+                void syncMonitorServersFromRepository().catch(error => {
+                    log.error({error}, "Не удалось пересобрать список опроса после изменения подписок");
+                });
+            }),
+        ])
         : undefined;
 
     if (!telegramApi) {
@@ -177,9 +185,10 @@ async function main(): Promise<any> {
         }
     }
 
-    if (notifierConfig.telegram && telegramApi) {
-        //Один на процесс: адресат теперь параметр send(), а лимит Bot API общий на бота.
-        const telegramSender = new TelegramSender(telegramApi);
+    if (notifierConfig.telegram && telegramBot) {
+        //Отправка принадлежит боту, но start() ей не нужен: sendMessage — обычный HTTP-запрос,
+        //long polling нужен только входящим командам (см. TelegramBot).
+        const telegramSender = telegramBot.sender;
 
         //Событие про сервер — одно, адресатов у него столько, сколько подписчиков.
         //Рассылка стоит СНАРУЖИ дедупликации, а не внутри: у каждого чата своя память доставок,
