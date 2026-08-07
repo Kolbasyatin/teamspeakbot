@@ -1,8 +1,10 @@
 import type {Bot, Context} from "grammy";
-import type {Chat} from "grammy/types";
+import type {BotCommand, Chat} from "grammy/types";
 import type {CatalogServer} from "../catalog/CatalogServer.js";
+import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
 import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat} from "./TelegramChat.js";
+import {renderServerStatus} from "./ServerStatusMessage.js";
 import {
     decodeAction,
     PAGE_SIZE,
@@ -34,12 +36,20 @@ export interface SubscriptionStore {
     findSubscribedServerIds(chatId: number): Promise<number[]>;
 }
 
+//Текущее состояние опрашиваемых серверов: боту нужен только снимок, весь ServerMonitor
+//ему знать незачем.
+export interface StatusSource {
+    getSnapshot(): ServerProbeSnapshot[];
+}
+
 const START_TEXT = [
     "Слежу за игровыми серверами и пишу, когда они падают и поднимаются.",
     "",
     "/serverlist — каталог серверов, выбрать за какими следить",
     "/serverlist arma — то же самое с поиском по названию",
     "/my — мои подписки",
+    "/status — что сейчас с моими серверами",
+    "/time — то же самое",
 ].join("\n");
 
 //Команды подписок. Отдельно от TelegramBot намеренно: тот показывает состояние (/time, /who),
@@ -54,10 +64,22 @@ export class SubscriptionCommands implements BotCommands {
     constructor(
         private readonly catalog: ServerCatalog,
         private readonly subscriptions: SubscriptionStore,
+        private readonly status: StatusSource,
         //Подписка меняет список опроса, поэтому монитор надо пересобрать. Что именно это значит,
         //знает composition root — здесь только факт «подписки изменились».
         private readonly onSubscriptionsChanged: () => void,
     ) {
+    }
+
+    //`/time` в меню нет намеренно: он синоним `/status`, и показывать одно и то же двумя строками
+    //значит запутать. Работать при этом продолжает — старые сообщения и привычка никуда не делись.
+    public describe(): BotCommand[] {
+        return [
+            {command: "serverlist", description: "каталог серверов"},
+            {command: "my", description: "мои подписки"},
+            {command: "status", description: "что сейчас с моими серверами"},
+            {command: "start", description: "что умеет бот"},
+        ];
     }
 
     public register(bot: Bot): void {
@@ -74,6 +96,13 @@ export class SubscriptionCommands implements BotCommands {
         bot.command("my", async ctx => {
             await this.rememberChat(ctx);
             await this.replyWithList(ctx, "mine", 0, "");
+        });
+
+        ///time — синоним /status: раньше он показывал ВСЕ опрашиваемые серверы, а после перехода
+        //на подписки это объединение чужих списков, то есть любой видел, за чем следят остальные.
+        bot.command(["status", "time"], async ctx => {
+            await this.rememberChat(ctx);
+            await ctx.reply(await this.renderStatus(ctx.chatId ?? 0), {parse_mode: "HTML"});
         });
 
         bot.on("callback_query:data", async ctx => {
@@ -106,6 +135,24 @@ export class SubscriptionCommands implements BotCommands {
                 log.debug({error}, "Не удалось обновить сообщение со списком серверов");
             });
         });
+    }
+
+    //«Что сейчас с моими серверами». Спросить можно только про подписанное, поэтому особого случая
+    //«сервер не отслеживают» здесь нет — есть другой: сервер скрыли из каталога уже ПОСЛЕ подписки,
+    //и тогда он подписан, но не опрашивается. Такие показываются отдельно, иначе список молча
+    //короче, чем подписки.
+    private async renderStatus(chatId: number): Promise<string> {
+        const subscribedIds = new Set(await this.subscriptions.findSubscribedServerIds(chatId));
+        const snapshots = this.status.getSnapshot().filter(snapshot => subscribedIds.has(snapshot.config.id));
+
+        for (const snapshot of snapshots) {
+            subscribedIds.delete(snapshot.config.id);
+        }
+
+        //Имена оставшихся — из каталога: снимка у них нет, брать имя неоткуда.
+        const unmonitored = await this.catalog.findByIds([...subscribedIds]);
+
+        return renderServerStatus(snapshots, unmonitored, new Date());
     }
 
     private async toggleSubscription(chatId: number, serverId: number): Promise<void> {

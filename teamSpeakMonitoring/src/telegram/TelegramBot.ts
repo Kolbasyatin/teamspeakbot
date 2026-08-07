@@ -1,15 +1,20 @@
 import type {Bot, BotError} from "grammy";
+import type {BotCommand} from "grammy/types";
 import {TelegramSender} from "./TelegramSender.js";
 import {log} from "../logger.js";
 
-//Набор команд: знает только, как повесить свои обработчики на бота. Зависимости у каждого набора
-//свои — командам состояния нужен монитор, командам подписок репозитории, — и сваливать их
-//в один конструктор незачем.
+//Набор команд: знает, как повесить свои обработчики на бота и как назвать себя в меню.
+//Зависимости у каждого набора свои — командам TeamSpeak нужно соединение, командам подписок
+//репозитории, — и сваливать их в один конструктор незачем.
 //
 //Форма та же, что у уведомлений: NotificationDispatcher владеет доставкой, а список подписок
 //собирается в composition root. Здесь ровно так же — владелец один, список снаружи.
 export interface BotCommands {
     register(bot: Bot): void;
+
+    //Подсказки, которые Telegram показывает при вводе «/». Метод обязательный, а не опциональный,
+    //намеренно: новый набор не сможет молча не попасть в меню — компилятор потребует ответ.
+    describe(): BotCommand[];
 }
 
 //Единственный владелец всего телеграмного: сам Bot, наборы команд, отправка и жизненный цикл.
@@ -30,12 +35,17 @@ export class TelegramBot {
     //решают подписки, и знать об этом боту незачем.
     public readonly sender: TelegramSender;
 
+    //Собирается из наборов, а не пишется отдельным списком: иначе добавленную команду легко
+    //зарегистрировать и забыть показать.
+    private readonly menu: BotCommand[];
+
     //Bot создаётся в composition root: один long polling и один api-клиент на процесс.
     constructor(
         private readonly bot: Bot,
         commands: readonly BotCommands[],
     ) {
         this.sender = new TelegramSender(bot);
+        this.menu = commands.flatMap(set => set.describe());
 
         for (const set of commands) {
             set.register(bot);
@@ -61,6 +71,13 @@ export class TelegramBot {
     //ждать — иначе запуск приложения из него не вернётся. Но и голый void оставлять нельзя:
     //отказ самого long polling ушёл бы в unhandled rejection и не попал бы в лог вообще.
     public start(): void {
+        //Меню публикуется здесь, а не в конструкторе: это сетевой вызов, а конструктор должен
+        //оставаться дешёвым и безотказным. Отказ не мешает работе — команды продолжат отвечать,
+        //просто подсказок при вводе «/» не будет, — поэтому только лог.
+        void this.bot.api.setMyCommands(this.menu).catch((error: unknown) => {
+            log.error({error}, "Не удалось опубликовать меню команд Telegram");
+        });
+
         void this.bot.start().catch((error: unknown) => {
             log.error({error}, "Long polling Telegram остановлен ошибкой — бот не принимает команды");
         });
@@ -68,5 +85,11 @@ export class TelegramBot {
 
     public async stop(): Promise<void> {
         await this.bot.stop();
+    }
+
+    //Что уйдёт в setMyCommands. Публично только ради теста: собранное меню — единственное, чего
+    //не видно снаружи иначе как сетевым вызовом.
+    public describeMenu(): readonly BotCommand[] {
+        return this.menu;
     }
 }

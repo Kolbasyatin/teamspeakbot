@@ -29,7 +29,7 @@ import {type ScheduledTask, Scheduler} from "./monitoring/Scheduler.js";
 import {LogNotifier, summarizeForLog} from "./notifications/LogNotifier.js";
 import {ChannelDescriptionRenderer} from "./teamspeak/ChannelDescriptionRenderer.js";
 import {TelegramBot} from "./telegram/TelegramBot.js";
-import {StatusCommands} from "./telegram/StatusCommands.js";
+import {TeamSpeakCommands} from "./telegram/TeamSpeakCommands.js";
 import {SubscriptionCommands} from "./telegram/SubscriptionCommands.js";
 import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
@@ -112,8 +112,8 @@ async function main(): Promise<any> {
     //Сами команды не зависят от TELEGRAM_NOTIFIER: тот флаг управляет только уведомлениями.
     const telegramBot = telegramApi
         ? new TelegramBot(telegramApi, [
-            new StatusCommands(monitor, teamSpeakClient),
-            new SubscriptionCommands(serverRepository, subscriptionRepository, () => {
+            new TeamSpeakCommands(teamSpeakClient),
+            new SubscriptionCommands(serverRepository, subscriptionRepository, monitor, () => {
                 void syncMonitorServersFromRepository().catch(error => {
                     log.error({error}, "Не удалось пересобрать список опроса после изменения подписок");
                 });
