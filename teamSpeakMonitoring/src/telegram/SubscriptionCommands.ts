@@ -1,16 +1,19 @@
-import type {Bot, Context} from "grammy";
+import type {Bot, Context, InlineKeyboard} from "grammy";
 import type {BotCommand, Chat} from "grammy/types";
 import type {CatalogServer} from "../catalog/CatalogServer.js";
 import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
 import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat} from "./TelegramChat.js";
-import {renderServerStatus} from "./ServerStatusMessage.js";
+import {renderServerStatus, STATUS_REFRESH} from "./ServerStatusMessage.js";
 import {
     decodeAction,
+    LIST_ACTION_PATTERN,
     PAGE_SIZE,
     pageCount,
     renderServerList,
     sanitizeSearch,
+    type ListAction,
+    type ListActionType,
     type ListView,
     type ServerListPage,
 } from "./ServerListMessage.js";
@@ -71,6 +74,17 @@ export class SubscriptionCommands implements BotCommands {
     ) {
     }
 
+    //Что делать по каждому действию списка. Record, а не if: добавишь третье действие — сборка
+    //упадёт, пока ему не напишут обработчик. С «если не toggle, значит просто перерисовать»
+    //новое действие молча вело бы себя как перелистывание.
+    //
+    //Перерисовка сюда не входит: она общая для всех действий и делается после, в applyListAction.
+    //Поэтому у page обработчик пустой — перелистывание само по себе ничего не меняет.
+    private readonly listActions: Record<ListActionType, (chatId: number, action: ListAction) => Promise<void>> = {
+        toggle: (chatId, action) => this.toggleSubscription(chatId, action.serverId),
+        page: () => Promise.resolve(),
+    };
+
     //`/time` в меню нет намеренно: он синоним `/status`, и показывать одно и то же двумя строками
     //значит запутать. Работать при этом продолжает — старые сообщения и привычка никуда не делись.
     public describe(): BotCommand[] {
@@ -102,46 +116,74 @@ export class SubscriptionCommands implements BotCommands {
         //на подписки это объединение чужих списков, то есть любой видел, за чем следят остальные.
         bot.command(["status", "time"], async ctx => {
             await this.rememberChat(ctx);
-            await ctx.reply(await this.renderStatus(ctx.chatId ?? 0), {parse_mode: "HTML"});
+
+            const {text, keyboard} = await this.renderStatus(ctx.chatId ?? 0);
+
+            await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
         });
 
-        bot.on("callback_query:data", async ctx => {
-            const action = decodeAction(ctx.callbackQuery.data);
+        //Кнопки разводятся маршрутизацией grammy, а не цепочкой if внутри одного обработчика:
+        //новая кнопка — новая строка регистрации, а не новая ветка. Порядок значим — последний
+        //обработчик ловит всё, что не подошло предыдущим.
+        bot.callbackQuery(STATUS_REFRESH, ctx => this.refreshStatus(ctx));
+        bot.callbackQuery(LIST_ACTION_PATTERN, ctx => this.applyListAction(ctx));
+        bot.on("callback_query:data", ctx => this.answerOutdated(ctx));
+    }
 
-            //Нажали кнопку из сообщения, отправленного до смены формата. Ронять обработчик незачем,
-            //но и молчать нельзя: у человека крутится часик на кнопке.
-            if (!action) {
-                await ctx.answerCallbackQuery("Кнопка устарела, открой список заново");
-                return;
-            }
+    private async refreshStatus(ctx: Context): Promise<void> {
+        await this.rememberChat(ctx);
+        await ctx.answerCallbackQuery();
 
-            await this.rememberChat(ctx);
+        const {text, keyboard} = await this.renderStatus(ctx.chatId ?? 0);
 
-            if (action.action === "toggle") {
-                await this.toggleSubscription(ctx.chatId ?? 0, action.serverId);
-            }
-
-            //Часик на кнопке гасится ДО перерисовки: она ходит в БД и в Telegram, и всё это время
-            //кнопка выглядела бы зависшей.
-            await ctx.answerCallbackQuery();
-
-            const page = await this.loadPage(ctx.chatId ?? 0, action.view, action.page, action.search);
-            const {text, keyboard} = renderServerList(page);
-
-            //Правим то же сообщение, а не шлём новое: список — это табло, а не переписка.
-            //Ошибку глушим: Telegram отвечает отказом, если текст и клавиатура не изменились,
-            //а такое бывает при двойном нажатии на одну и ту же кнопку.
-            await ctx.editMessageText(text, {reply_markup: keyboard}).catch((error: unknown) => {
-                log.debug({error}, "Не удалось обновить сообщение со списком серверов");
+        //Правим то же сообщение по его id — он приезжает в контексте нажатия.
+        //Ошибку глушим: при неизменившемся тексте Telegram отвечает отказом.
+        await ctx.editMessageText(text, {parse_mode: "HTML", reply_markup: keyboard})
+            .catch((error: unknown) => {
+                log.debug({error}, "Не удалось обновить сообщение статуса");
             });
+    }
+
+    private async applyListAction(ctx: Context): Promise<void> {
+        const action = decodeAction(ctx.callbackQuery?.data ?? "");
+
+        //Начало данных подошло под шаблон, а целиком строка не разобралась: формат сменился
+        //между отправкой сообщения и нажатием.
+        if (!action) {
+            await this.answerOutdated(ctx);
+            return;
+        }
+
+        await this.rememberChat(ctx);
+        await this.listActions[action.action](ctx.chatId ?? 0, action);
+
+        //Нажатие подтверждается ДО перерисовки: она ходит в БД и в Telegram, и всё это время
+        //на кнопке висел бы индикатор загрузки.
+        await ctx.answerCallbackQuery();
+
+        const page = await this.loadPage(ctx.chatId ?? 0, action.view, action.page, action.search);
+        const {text, keyboard} = renderServerList(page);
+
+        //Правим то же сообщение, а не шлём новое: список — это табло, а не переписка.
+        //Ошибку глушим: Telegram отвечает отказом, если текст и клавиатура не изменились,
+        //а такое бывает при двойном нажатии на одну и ту же кнопку.
+        await ctx.editMessageText(text, {reply_markup: keyboard}).catch((error: unknown) => {
+            log.debug({error}, "Не удалось обновить сообщение со списком серверов");
         });
+    }
+
+    //Нажали кнопку из сообщения, отправленного до смены формата. Ронять обработчик незачем,
+    //но и молчать нельзя: пока бот не подтвердит нажатие через answerCallbackQuery, Telegram
+    //держит на кнопке индикатор загрузки — около тридцати секунд, и выглядит это как зависший бот.
+    private async answerOutdated(ctx: Context): Promise<void> {
+        await ctx.answerCallbackQuery("Кнопка устарела, открой список заново");
     }
 
     //«Что сейчас с моими серверами». Спросить можно только про подписанное, поэтому особого случая
     //«сервер не отслеживают» здесь нет — есть другой: сервер скрыли из каталога уже ПОСЛЕ подписки,
     //и тогда он подписан, но не опрашивается. Такие показываются отдельно, иначе список молча
     //короче, чем подписки.
-    private async renderStatus(chatId: number): Promise<string> {
+    private async renderStatus(chatId: number): Promise<{text: string; keyboard: InlineKeyboard}> {
         const subscribedIds = new Set(await this.subscriptions.findSubscribedServerIds(chatId));
         const snapshots = this.status.getSnapshot().filter(snapshot => subscribedIds.has(snapshot.config.id));
 

@@ -8,7 +8,7 @@ import {snapshotFixture} from "../test/serverFixtures.js";
 const NOW = new Date(2 * 60 * 60 * 1000 + 15 * 60 * 1000);
 
 test("пустые подписки зовут в каталог", () => {
-    assert.match(renderServerStatus([], [], NOW), /\/serverlist/);
+    assert.match(renderServerStatus([], [], NOW).text, /\/serverlist/);
 });
 
 test("имя и факты стоят на разных строках", () => {
@@ -18,7 +18,7 @@ test("имя и факты стоят на разных строках", () => {
         [snapshotFixture({id: 1, name: "Первый", status: "online", players: 27, maxPlayers: 64})],
         [],
         NOW,
-    );
+    ).text;
 
     assert.match(text, /🟢 <b>Первый<\/b>\n👥 27\/64 {3}⏱ 2 часа 15 минут/);
 });
@@ -29,7 +29,7 @@ test("упавший сервер не показывает чисел", () => {
         [snapshotFixture({id: 1, name: "Первый", status: "offline"})],
         [],
         NOW,
-    );
+    ).text;
 
     assert.match(text, /🔴 <b>Первый<\/b>\n⏱ офлайн 2 часа 15 минут/);
 });
@@ -40,7 +40,7 @@ test("живой сервер без данных так и говорит, а �
         [snapshotFixture({id: 1, name: "Первый", status: "unknown"})],
         [],
         NOW,
-    );
+    ).text;
 
     assert.match(text, /👥 нет данных/);
 });
@@ -48,7 +48,7 @@ test("живой сервер без данных так и говорит, а �
 test("подписка на скрытый сервер видна отдельной строкой", () => {
     //Сервер убрали из каталога уже после подписки: опроса нет, снимка нет. Промолчать нельзя —
     //иначе список короче, чем подписки, и человек не поймёт почему.
-    const text = renderServerStatus([], [{name: "Скрытый"}], NOW);
+    const text = renderServerStatus([], [{name: "Скрытый"}], NOW).text;
 
     assert.match(text, /⚪ <b>Скрытый<\/b>\nне отслеживается/);
 });
@@ -56,7 +56,7 @@ test("подписка на скрытый сервер видна отдель�
 test("угловые скобки в имени экранируются", () => {
     //Незакрытый «<» в названии — это не кривая вёрстка, а отказ Telegram разобрать сообщение,
     //то есть /status перестанет отвечать вообще.
-    const text = renderServerStatus([], [{name: "<b>злое</b> & имя"}], NOW);
+    const text = renderServerStatus([], [{name: "<b>злое</b> & имя"}], NOW).text;
 
     assert.match(text, /⚪ <b>&lt;b&gt;злое&lt;\/b&gt; &amp; имя<\/b>/);
 });
@@ -66,7 +66,7 @@ test("в заголовке считаются и отслеживаемые, и
         [snapshotFixture({id: 1, name: "Первый", status: "online", players: 1})],
         [{name: "Скрытый"}],
         NOW,
-    );
+    ).text;
 
     assert.match(text, /Твои серверы: 2/);
 });
@@ -76,7 +76,27 @@ test("статус моложе минуты не показывается пу�
         [snapshotFixture({id: 1, name: "Первый", status: "online", players: 1})],
         [],
         new Date(30 * 1000),
-    );
+    ).text;
 
     assert.match(text, /меньше минуты/);
+});
+
+test("отметка времени меняется, даже когда данные те же", () => {
+    //Без неё повторное нажатие «Обновить» даёт байт в байт тот же текст, Telegram отвечает
+    //«message is not modified», и кнопка выглядит сломанной.
+    const server = snapshotFixture({id: 1, name: "Первый", status: "online", players: 27});
+
+    const first = renderServerStatus([server], [], new Date(3600 * 1000)).text;
+    const second = renderServerStatus([server], [], new Date(3600 * 1000 + 5000)).text;
+
+    assert.notEqual(first, second);
+});
+
+test("кнопка обновления есть всегда, в том числе у пустого списка", () => {
+    const {keyboard} = renderServerStatus([], [], NOW);
+
+    assert.deepEqual(
+        keyboard.inline_keyboard.flat().map(button => button.text),
+        ["🔄 Обновить"],
+    );
 });

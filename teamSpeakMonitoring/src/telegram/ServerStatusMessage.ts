@@ -1,3 +1,4 @@
+import {InlineKeyboard} from "grammy";
 import {formatDuration, intervalToDuration} from "date-fns";
 import {ru} from "date-fns/locale";
 import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
@@ -32,13 +33,42 @@ const STATUS_MARK = {
 const PLAYERS = "👥";
 const CLOCK = "⏱";
 
+//Единственная кнопка этого сообщения, поэтому и протокол у неё вырожденный — одна константа.
+//Разбирать нечего: что нажали, известно из самого факта нажатия.
+//С форматом списка не пересекается: там ровно пять частей через двоеточие, здесь две.
+export const STATUS_REFRESH = "s:r";
+
+const MOSCOW_TIME = new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZone: "Europe/Moscow",
+});
+
 export function renderServerStatus(
     snapshots: readonly ServerProbeSnapshot[],
     unmonitored: readonly UnmonitoredServer[],
     now: Date,
+): {text: string; keyboard: InlineKeyboard} {
+    return {
+        text: renderText(snapshots, unmonitored, now),
+        keyboard: new InlineKeyboard().text("🔄 Обновить", STATUS_REFRESH),
+    };
+}
+
+function renderText(
+    snapshots: readonly ServerProbeSnapshot[],
+    unmonitored: readonly UnmonitoredServer[],
+    now: Date,
 ): string {
+    //Отметка времени внизу — не украшение. Данные между двумя нажатиями часто совпадают до буквы
+    //(длительность округлена до минут, игроки меняются редко), а Telegram отказывается править
+    //сообщение тем же текстом: «message is not modified». Без отметки кнопка выглядела бы
+    //сломанной — нажал, и ничего не произошло.
+    const updated = `<i>обновлено ${MOSCOW_TIME.format(now)}</i>`;
+
     if (snapshots.length === 0 && unmonitored.length === 0) {
-        return "Ты пока ни на что не подписан. Открой /serverlist и выбери серверы.";
+        return `Ты пока ни на что не подписан. Открой /serverlist и выбери серверы.\n\n${updated}`;
     }
 
     const entries = [
@@ -48,7 +78,7 @@ export function renderServerStatus(
 
     //Пустая строка между серверами: без неё две строки одного сервера сливаются с двумя строками
     //следующего, и глазом их не разделить.
-    return [`<b>Твои серверы: ${entries.length}</b>`, ...entries].join("\n\n");
+    return [`<b>Твои серверы: ${entries.length}</b>`, ...entries, updated].join("\n\n");
 }
 
 function renderEntry(snapshot: ServerProbeSnapshot, now: Date): string {

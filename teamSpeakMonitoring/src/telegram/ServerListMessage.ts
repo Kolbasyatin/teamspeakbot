@@ -36,6 +36,14 @@ export interface ListAction {
 const VIEW_CODE: Record<ListView, string> = {catalog: "c", mine: "m"};
 const ACTION_CODE: Record<ListActionType, string> = {toggle: "t", page: "p"};
 
+//По чему бот узнаёт свою кнопку среди чужих. Собирается из тех же таблиц, а не пишется руками:
+//иначе новый код действия пришлось бы вписывать в два места, и забытое второе означало бы
+//кнопку, которую никто не обрабатывает.
+//Проверяет только начало — полный разбор делает decodeAction.
+export const LIST_ACTION_PATTERN = new RegExp(
+    `^[${Object.values(VIEW_CODE).join("")}]:[${Object.values(ACTION_CODE).join("")}]:`,
+);
+
 export interface ServerListPage {
     view: ListView;
     servers: CatalogServer[];
