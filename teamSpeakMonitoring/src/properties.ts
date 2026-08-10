@@ -109,6 +109,44 @@ const monitorConfig = convict<MonitorProperties>({
     },
 });
 
+//Правило «похоже, раунд заканчивается». Отдельно от MonitorProperties: монитор про раунды
+//не знает и знать не должен. Значения подобраны не на глаз, а по разбору двух суток прод-логов —
+//см. telegram.md, §11.
+export interface RoundFinishProperties {
+    windowMs: number;
+    drop: number;
+    minBase: number;
+    //Ниже этого числа считаем, что сервер перезапустился и историю прошлой сессии надо забыть.
+    emptyPlayers: number;
+}
+
+const roundFinishConfig = convict<RoundFinishProperties>({
+    windowMs: {
+        doc: "Window in milliseconds used to compute the player-count baseline",
+        format: "nat",
+        default: 60_000,
+        env: "ROUND_FINISH_WINDOW_MS",
+    },
+    drop: {
+        doc: "Relative drop from the baseline that triggers the signal (0.25 = a quarter)",
+        format: Number,
+        default: 0.25,
+        env: "ROUND_FINISH_DROP",
+    },
+    minBase: {
+        doc: "Minimum baseline players; below it a drop is not a round finish",
+        format: "nat",
+        default: 20,
+        env: "ROUND_FINISH_MIN_BASE",
+    },
+    emptyPlayers: {
+        doc: "Player count that means the session restarted and history must be dropped",
+        format: "nat",
+        default: 2,
+        env: "ROUND_FINISH_EMPTY_PLAYERS",
+    },
+});
+
 //Период повторной публикации текущего состояния. Отдельно от MonitorProperties намеренно:
 //монитор про эту периодику не знает, тик живёт в composition root. Имя переменной оставлено
 //в семье MONITOR_*, потому что речь о состоянии, которое собирает монитор.
@@ -234,3 +272,4 @@ export const teamSpeakChannelNames = teamSpeakChannelsConfig.getProperties();
 export const tgProperties = tgConfig.getProperties();
 export const monitorProperties = monitorConfig.getProperties();
 export const stateSyncProperties = stateSyncConfig.getProperties();
+export const roundFinishProperties = roundFinishConfig.getProperties();

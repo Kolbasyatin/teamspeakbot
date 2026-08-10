@@ -79,7 +79,7 @@ test("подписка читается с обеих сторон", async () =>
     await repository.subscribe(100, serverId);
 
     assert.deepEqual(await repository.findSubscribedServerIds(100), [serverId]);
-    assert.deepEqual(await repository.findSubscriberChatIds(serverId), [100]);
+    assert.deepEqual(await repository.findSubscriberChatIds(serverId, "availability"), [100]);
 });
 
 test("повторная подписка не создаёт дубля и не падает", async () => {
@@ -91,7 +91,7 @@ test("повторная подписка не создаёт дубля и не
     await repository.subscribe(100, serverId);
     await repository.subscribe(100, serverId);
 
-    assert.deepEqual(await repository.findSubscriberChatIds(serverId), [100]);
+    assert.deepEqual(await repository.findSubscriberChatIds(serverId, "availability"), [100]);
 });
 
 test("отписка удаляет только свою пару", async () => {
@@ -107,7 +107,7 @@ test("отписка удаляет только свою пару", async () =>
     await repository.unsubscribe(100, firstServer);
 
     assert.deepEqual(await repository.findSubscribedServerIds(100), [secondServer]);
-    assert.deepEqual(await repository.findSubscriberChatIds(firstServer), [200]);
+    assert.deepEqual(await repository.findSubscriberChatIds(firstServer, "availability"), [200]);
 });
 
 test("отписка от того, на что не подписан, не ошибка", async () => {
@@ -136,7 +136,7 @@ test("удаление чата уносит его подписки", async () 
 
     await pool.query("DELETE FROM telegram_chats WHERE chat_id = ?", [100]);
 
-    assert.deepEqual(await repository.findSubscriberChatIds(serverId), []);
+    assert.deepEqual(await repository.findSubscriberChatIds(serverId, "availability"), []);
 });
 
 test("подписки чужого чата не приезжают", async () => {
@@ -151,6 +151,72 @@ test("подписки чужого чата не приезжают", async () 
 
 test("несуществующий чат не читается", async () => {
     assert.equal(await repository.findChat(999), undefined);
+});
+
+test("подписка включает оба типа уведомлений", async () => {
+    //Человек подписывается, чтобы знать, а не чтобы потом искать настройки.
+    const serverId = await insertServer("Server");
+    await insertTelegramChatFixture(pool, {chatId: 100});
+
+    await repository.subscribe(100, serverId);
+
+    assert.deepEqual(
+        (await repository.findSubscriptionEvents(100, serverId)).toSorted(),
+        ["availability", "roundFinish"],
+    );
+});
+
+test("повторная подписка не возвращает снятые галочки", async () => {
+    //Иначе двойное нажатие в списке молча включало бы обратно то, что человек только что выключил.
+    const serverId = await insertServer("Server");
+    await insertTelegramChatFixture(pool, {chatId: 100});
+
+    await repository.subscribe(100, serverId);
+    await repository.disableEvent(100, serverId, "roundFinish");
+    await repository.subscribe(100, serverId);
+
+    assert.deepEqual(await repository.findSubscriptionEvents(100, serverId), ["availability"]);
+});
+
+test("рассылка спрашивает подписчиков по типу", async () => {
+    //Главное свойство механизма: следит за сервером — не значит хочет знать про каждый конец раунда.
+    const serverId = await insertServer("Server");
+    await insertTelegramChatFixture(pool, {chatId: 100});
+    await insertTelegramChatFixture(pool, {chatId: 200});
+
+    await repository.subscribe(100, serverId);
+    await repository.subscribe(200, serverId);
+    await repository.disableEvent(200, serverId, "roundFinish");
+
+    assert.deepEqual(await repository.findSubscriberChatIds(serverId, "availability"), [100, 200]);
+    assert.deepEqual(await repository.findSubscriberChatIds(serverId, "roundFinish"), [100]);
+});
+
+test("выключенный тип включается обратно", async () => {
+    const serverId = await insertServer("Server");
+    await insertTelegramChatFixture(pool, {chatId: 100});
+
+    await repository.subscribe(100, serverId);
+    await repository.disableEvent(100, serverId, "availability");
+    await repository.enableEvent(100, serverId, "availability");
+
+    assert.deepEqual(
+        (await repository.findSubscriptionEvents(100, serverId)).toSorted(),
+        ["availability", "roundFinish"],
+    );
+});
+
+test("отписка уносит типы вместе с подпиской", async () => {
+    const serverId = await insertServer("Server");
+    await insertTelegramChatFixture(pool, {chatId: 100});
+
+    await repository.subscribe(100, serverId);
+    await repository.unsubscribe(100, serverId);
+
+    assert.deepEqual(await repository.findSubscriptionEvents(100, serverId), []);
+
+    const [row] = await pool.query("SELECT COUNT(*) AS total FROM server_subscription_events");
+    assert.equal(Number(row.total), 0);
 });
 
 test.after(async () => {

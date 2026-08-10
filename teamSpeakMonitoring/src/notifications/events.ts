@@ -15,11 +15,16 @@ import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
 //
 //Обоим событиям достаются сырые снапшоты, а не готовый вид: что из них показать — дело
 //потребителя, и у описания канала, журнала и будущего HTTP-эндпоинта ответы разные.
+//roundFinish — «похоже, раунд заканчивается»: игроки начали расходиться, до перезапуска сервера
+//остаётся около полутора минут. Это ПРОГНОЗ, а не факт, поэтому и событие отдельное от статусов:
+//сервер при этом жив и online. Кто и по какому правилу его публикует — RoundFinishWatcher.
+//playersBefore нужен тексту: «было 127, стало 92» объясняет, почему мы это говорим.
 export type NotificationEvent =
     | { type: "serverStateUpdated"; snapshots: ServerProbeSnapshot[] }
     | { type: "serverStateRepublished"; snapshots: ServerProbeSnapshot[] }
     | { type: "serverOnline"; snapshot: ServerProbeSnapshot }
-    | { type: "serverOffline"; snapshot: ServerProbeSnapshot };
+    | { type: "serverOffline"; snapshot: ServerProbeSnapshot }
+    | { type: "roundFinish"; snapshot: ServerProbeSnapshot; playersBefore: number };
 
 export type NotificationEventType = NotificationEvent["type"];
 

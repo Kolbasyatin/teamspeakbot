@@ -6,6 +6,14 @@ import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat} from "./TelegramChat.js";
 import {renderServerStatus, STATUS_REFRESH} from "./ServerStatusMessage.js";
 import {
+    CARD_ACTION_PATTERN,
+    decodeCardAction,
+    renderServerCard,
+    type CardAction,
+    type CardActionType,
+} from "./ServerCardMessage.js";
+import type {SubscriptionEventKind} from "./SubscriptionEvent.js";
+import {
     decodeAction,
     LIST_ACTION_PATTERN,
     PAGE_SIZE,
@@ -37,6 +45,12 @@ export interface SubscriptionStore {
     unsubscribe(chatId: number, serverId: number): Promise<void>;
 
     findSubscribedServerIds(chatId: number): Promise<number[]>;
+
+    findSubscriptionEvents(chatId: number, serverId: number): Promise<SubscriptionEventKind[]>;
+
+    enableEvent(chatId: number, serverId: number, kind: SubscriptionEventKind): Promise<void>;
+
+    disableEvent(chatId: number, serverId: number, kind: SubscriptionEventKind): Promise<void>;
 }
 
 //Текущее состояние опрашиваемых серверов: боту нужен только снимок, весь ServerMonitor
@@ -50,7 +64,7 @@ const START_TEXT = [
     "",
     "/serverlist — каталог серверов, выбрать за какими следить",
     "/serverlist arma — то же самое с поиском по названию",
-    "/my — мои подписки",
+    "/my — мои подписки и настройка уведомлений по каждому серверу",
     "/status — что сейчас с моими серверами",
     "/time — то же самое",
 ].join("\n");
@@ -74,15 +88,35 @@ export class SubscriptionCommands implements BotCommands {
     ) {
     }
 
-    //Что делать по каждому действию списка. Record, а не if: добавишь третье действие — сборка
-    //упадёт, пока ему не напишут обработчик. С «если не toggle, значит просто перерисовать»
-    //новое действие молча вело бы себя как перелистывание.
+    //Что делать по каждому действию списка. Record, а не if: добавишь действие — сборка упадёт,
+    //пока ему не напишут обработчик. С «если не toggle, значит просто перерисовать» новое
+    //действие молча вело бы себя как перелистывание.
     //
-    //Перерисовка сюда не входит: она общая для всех действий и делается после, в applyListAction.
-    //Поэтому у page обработчик пустой — перелистывание само по себе ничего не меняет.
-    private readonly listActions: Record<ListActionType, (chatId: number, action: ListAction) => Promise<void>> = {
-        toggle: (chatId, action) => this.toggleSubscription(chatId, action.serverId),
-        page: () => Promise.resolve(),
+    //Каждый обработчик сам решает, что показать в конце: раньше перерисовка была общей, но open
+    //рисует не список, а карточку, и общий хвост стал бы враньём.
+    private readonly listActions: Record<ListActionType, (ctx: Context, action: ListAction) => Promise<void>> = {
+        toggle: async (ctx, action) => {
+            await this.toggleSubscription(ctx.chatId ?? 0, action.serverId);
+            await this.showList(ctx, action);
+        },
+        page: (ctx, action) => this.showList(ctx, action),
+        open: (ctx, action) => this.showCard(ctx, action.serverId),
+    };
+
+    //Что делать по каждому действию карточки. Отдельная таблица, потому что и набор действий свой.
+    private readonly cardActions: Record<CardActionType, (ctx: Context, action: CardAction) => Promise<void>> = {
+        toggleEvent: async (ctx, action) => {
+            if (action.kind) {
+                await this.toggleEvent(ctx.chatId ?? 0, action.serverId, action.kind);
+            }
+            await this.showCard(ctx, action.serverId);
+        },
+        unsubscribe: async (ctx, action) => {
+            await this.subscriptions.unsubscribe(ctx.chatId ?? 0, action.serverId);
+            this.onSubscriptionsChanged();
+            await this.showList(ctx, {view: "mine", action: "page", serverId: 0, page: 0, search: ""});
+        },
+        back: (ctx) => this.showList(ctx, {view: "mine", action: "page", serverId: 0, page: 0, search: ""}),
     };
 
     //`/time` в меню нет намеренно: он синоним `/status`, и показывать одно и то же двумя строками
@@ -90,7 +124,7 @@ export class SubscriptionCommands implements BotCommands {
     public describe(): BotCommand[] {
         return [
             {command: "serverlist", description: "каталог серверов"},
-            {command: "my", description: "мои подписки"},
+            {command: "my", description: "мои подписки и настройки уведомлений"},
             {command: "status", description: "что сейчас с моими серверами"},
             {command: "start", description: "что умеет бот"},
         ];
@@ -127,6 +161,7 @@ export class SubscriptionCommands implements BotCommands {
         //обработчик ловит всё, что не подошло предыдущим.
         bot.callbackQuery(STATUS_REFRESH, ctx => this.refreshStatus(ctx));
         bot.callbackQuery(LIST_ACTION_PATTERN, ctx => this.applyListAction(ctx));
+        bot.callbackQuery(CARD_ACTION_PATTERN, ctx => this.applyCardAction(ctx));
         bot.on("callback_query:data", ctx => this.answerOutdated(ctx));
     }
 
@@ -155,12 +190,26 @@ export class SubscriptionCommands implements BotCommands {
         }
 
         await this.rememberChat(ctx);
-        await this.listActions[action.action](ctx.chatId ?? 0, action);
-
-        //Нажатие подтверждается ДО перерисовки: она ходит в БД и в Telegram, и всё это время
+        //Нажатие подтверждается ДО работы: она ходит в БД и в Telegram, и всё это время
         //на кнопке висел бы индикатор загрузки.
         await ctx.answerCallbackQuery();
+        await this.listActions[action.action](ctx, action);
+    }
 
+    private async applyCardAction(ctx: Context): Promise<void> {
+        const action = decodeCardAction(ctx.callbackQuery?.data ?? "");
+
+        if (!action) {
+            await this.answerOutdated(ctx);
+            return;
+        }
+
+        await this.rememberChat(ctx);
+        await ctx.answerCallbackQuery();
+        await this.cardActions[action.action](ctx, action);
+    }
+
+    private async showList(ctx: Context, action: ListAction): Promise<void> {
         const page = await this.loadPage(ctx.chatId ?? 0, action.view, action.page, action.search);
         const {text, keyboard} = renderServerList(page);
 
@@ -170,6 +219,39 @@ export class SubscriptionCommands implements BotCommands {
         await ctx.editMessageText(text, {reply_markup: keyboard}).catch((error: unknown) => {
             log.debug({error}, "Не удалось обновить сообщение со списком серверов");
         });
+    }
+
+    private async showCard(ctx: Context, serverId: number): Promise<void> {
+        const chatId = ctx.chatId ?? 0;
+        const [server] = await this.catalog.findByIds([serverId]);
+
+        //Сервер могли удалить из каталога, пока человек смотрел на список.
+        if (!server) {
+            await this.showList(ctx, {view: "mine", action: "page", serverId: 0, page: 0, search: ""});
+            return;
+        }
+
+        const enabled = new Set(await this.subscriptions.findSubscriptionEvents(chatId, serverId));
+        const {text, keyboard} = renderServerCard(server, enabled);
+
+        await ctx.editMessageText(text, {parse_mode: "HTML", reply_markup: keyboard})
+            .catch((error: unknown) => {
+                log.debug({error}, "Не удалось показать карточку сервера");
+            });
+    }
+
+    private async toggleEvent(
+        chatId: number,
+        serverId: number,
+        kind: SubscriptionEventKind,
+    ): Promise<void> {
+        const enabled = new Set(await this.subscriptions.findSubscriptionEvents(chatId, serverId));
+
+        if (enabled.has(kind)) {
+            await this.subscriptions.disableEvent(chatId, serverId, kind);
+        } else {
+            await this.subscriptions.enableEvent(chatId, serverId, kind);
+        }
     }
 
     //Нажали кнопку из сообщения, отправленного до смены формата. Ронять обработчик незачем,

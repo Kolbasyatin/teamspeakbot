@@ -93,6 +93,16 @@ teamSpeakMonitoring/         сам сервис
       SubscribedOnlyNotifier.ts  обёртка-фильтр: оставляет в событии только снапшоты серверов
                              своего чата. Ставится СНАРУЖИ ChangesOnlyNotifier — иначе чужой
                              сервер попадает в ключ дедупликации табло
+      RoundFinishNotifier.ts текст сигнала «похоже, раунд заканчивается». Без дедупликации:
+                             повторов не бывает, а запоздалый повтор врал бы
+
+    rounds/                ← домен: «похоже, раунд заканчивается»
+      PlayerHistory.ts       короткая история числа игроков за интерфейсом; в памяти для детектора,
+                             персистентная реализация понадобится графикам
+      detectRoundFinish.ts   чистое правило: окно замеров + текущее значение → вердикт.
+                             Пороги проверены на двух сутках прод-логов, см. telegram.md §11
+      RoundFinishWatcher.ts  потребитель serverStateUpdated и источник события roundFinish.
+                             Дополнительного опроса не делает — игроки из того же события
 
     queriers/              ← адаптеры опроса
       A2sQuerier.ts          @callowayisweird/source-query (единственный, кто знает эту библиотеку)
@@ -120,8 +130,15 @@ teamSpeakMonitoring/         сам сервис
                              (~30 сообщений/сек) общий на бота, поэтому и очередь будет здесь
       TelegramChat.ts        TelegramChat, TelegramChatType — контракт хранилища для подписчика
                              (по той же причине, что StoredServer лежит в monitoring/)
-      SubscriptionCommands.ts  /start, /serverlist, /my и обработка нажатий. Здесь же ServerCatalog
-                             и SubscriptionStore — узкие интерфейсы к репозиториям
+      SubscriptionCommands.ts  /start, /serverlist, /my, /status и обработка нажатий. Кнопки
+                             разводятся регистрацией (bot.callbackQuery по шаблону), а действия
+                             внутри — таблицами Record; здесь же ServerCatalog, SubscriptionStore
+                             и StatusSource — узкие интерфейсы к зависимостям
+      SubscriptionEvent.ts   типы уведомлений подписки: availability, roundFinish. Здесь же подписи
+                             для кнопок и умолчания — второго списка, который может разъехаться,
+                             не появляется
+      ServerCardMessage.ts   карточка сервера: галочки по типам, отписка. Своё пространство кодов
+                             callback_data, не пересекающееся со списком
       ServerListMessage.ts   текст и клавиатура списка чистой функцией + кодирование/разбор
                              callback_data (коды в Record, а не в тернарниках: забытое действие
                              валит сборку). Без grammy-контекста, проверяется без сети
@@ -133,8 +150,9 @@ teamSpeakMonitoring/         сам сервис
                              есть хотя бы одна подписка. Доменных решений не принимает
                              findCatalogPage/countCatalog/findByIds — каталог для бота: ВСЕ включённые
                              серверы, в том числе без подписок (иначе подписаться было бы не на что)
-      SubscriptionRepository.ts  чтение и запись подписок: чаты, подписка/отписка и обе стороны
-                             связи — «на что подписан чат» и «кто подписан на сервер»
+      SubscriptionRepository.ts  чтение и запись подписок: чаты, подписка/отписка, типы уведомлений
+                             и обе стороны связи — «на что подписан чат» и «кто подписан на сервер
+                             вот на этот тип»
       parseQueryConfig.ts    чистая функция разбора query_config (вся содержательная логика
                              persistence); проверяется в test:unit, без БД
       Migrator.ts            применяет недостающие миграции; здесь же контракт MigrationStore
@@ -415,7 +433,27 @@ CREATE TABLE IF NOT EXISTS server_subscriptions
     created_at timestamp default current_timestamp() not null,
     UNIQUE (server_id, chat_id)
 );
+
+CREATE TABLE IF NOT EXISTS server_subscription_events
+(
+    subscription_id bigint unsigned                       not null,  -- → server_subscriptions.id, ON DELETE CASCADE
+    event_kind      varchar(32)                           not null,  -- 'availability' | 'roundFinish'
+    created_at      timestamp default current_timestamp() not null,
+    primary key (subscription_id, event_kind)
+);
 ```
+
+**Типы уведомлений — отдельной таблицей, а не колонкой** (миграция 007). Добавление типа тогда
+не требует миграции вообще: это строки, а не схема. `SET` потребовал бы `ALTER` на каждый новый тип,
+JSON лишил бы проверок. `event_kind` строкой, а не `enum`, по той же причине — список допустимых
+значений живёт в коде (`SubscriptionEventKind`), как и `query_type` у источников опроса.
+
+Подписка при этом остаётся тем же, чем была, — «чат следит за сервером»; внутри у неё набор того,
+что присылать. Рассылка спрашивает **«кто подписан на сервер вот на этот тип»**: следить за сервером
+и хотеть знать про каждый конец раунда — разные вещи.
+
+При создании подписки включаются **оба** типа, и только при создании: повторный `subscribe`
+не должен возвращать галочки, которые человек снял.
 
 **Подписчик — чат, а не пользователь.** Bot API адресует сообщения по `chat_id`: для лички он равен
 `user_id`, для группы и канала это отдельное число. Возьми ключом `user_id` — и подписка группы

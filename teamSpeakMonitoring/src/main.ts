@@ -14,12 +14,16 @@ import {
     tgProperties,
     monitorProperties,
     stateSyncProperties,
+    roundFinishProperties,
     teamSpeakChannelNames,
 } from "./properties.js";
 import {notifierConfig} from "./notifierConfig.js";
 import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js";
 import {subscribe, type NotificationSubscription} from "./notifications/events.js";
 import {PerSubscriberNotifier} from "./notifications/PerSubscriberNotifier.js";
+import {RoundFinishNotifier} from "./notifications/RoundFinishNotifier.js";
+import {RoundFinishWatcher, type RoundFinishPublisher} from "./rounds/RoundFinishWatcher.js";
+import {InMemoryPlayerHistory} from "./rounds/PlayerHistory.js";
 import {SubscribedOnlyNotifier} from "./notifications/SubscribedOnlyNotifier.js";
 import {TeamSpeakChannelNotifier} from "./notifications/TeamSpeakChannelNotifier.js";
 import {LatestOnlyNotifier} from "./notifications/LatestOnlyNotifier.js";
@@ -202,6 +206,7 @@ async function main(): Promise<any> {
         //нельзя. Здесь это обеспечено тем, что notifierFor вызывается один раз на чат.
         const telegramStatusNotifier = new PerSubscriberNotifier<ServerStatusEventType>(
             subscriptionRepository,
+            "availability",
             event => event.snapshot.config.id,
             chatId => new ChangesOnlyNotifier(
                 //Привязка адресата — здесь, в composition root: нотифаеру по-прежнему нужна одна
@@ -214,11 +219,38 @@ async function main(): Promise<any> {
 
         subscriptions.push(subscribe("serverOnline", "telegram", telegramStatusNotifier));
         subscriptions.push(subscribe("serverOffline", "telegram", telegramStatusNotifier));
+
+        //Отдельный тип подписки: следить за сервером и хотеть знать про каждый конец раунда —
+        //разные вещи. Дедупликацией не оборачивается: наблюдатель сигналит один раз на эпизод,
+        //а повтор упавшей доставки через минуту говорил бы «скоро освободится» тогда,
+        //когда уже освободилось.
+        subscriptions.push(subscribe("roundFinish", "telegram", new PerSubscriberNotifier<"roundFinish">(
+            subscriptionRepository,
+            "roundFinish",
+            event => event.snapshot.config.id,
+            chatId => new RoundFinishNotifier({send: text => telegramSender.send(chatId, text)}),
+        )));
     }
 
     if (notifierConfig.telegram && !telegramApi) {
         log.warn("TELEGRAM_NOTIFIER включен, но TELEGRAM_TOKEN пуст — уведомления в Telegram отключены");
     }
+
+    //Наблюдатель за концом раунда — такой же потребитель «серверы опрошены», как табло TeamSpeak,
+    //и одновременно источник нового события. Отсюда кольцо: он подписан на диспетчер и в него же
+    //публикует. Разрывается вот этим объектом — он создаётся раньше диспетчера, а вызывается
+    //заведомо позже, уже во время работы.
+    //Дополнительного опроса не появляется: игроки берутся из того же события, что и у табло.
+    const roundFinishPublisher: RoundFinishPublisher = {
+        notify: (event): Promise<void> => dispatcher.notify(event),
+    };
+
+    subscriptions.push(subscribe("serverStateUpdated", "roundFinish", new RoundFinishWatcher(
+        new InMemoryPlayerHistory(roundFinishProperties.windowMs),
+        roundFinishPublisher,
+        roundFinishProperties,
+        () => Date.now(),
+    )));
 
     const dispatcher = new NotificationDispatcher(subscriptions, log);
 

@@ -15,8 +15,8 @@ export const PAGE_SIZE = 8;
 //catalog — «на что можно подписаться», mine — «на что я уже подписан».
 export type ListView = "catalog" | "mine";
 
-//toggle — переключить подписку на serverId, page — перелистнуть.
-export type ListActionType = "toggle" | "page";
+//toggle — переключить подписку на serverId, page — перелистнуть, open — открыть карточку сервера.
+export type ListActionType = "toggle" | "page" | "open";
 
 //Что пользователь нажал. Клавиатура и её разбор — две стороны одного протокола, поэтому лежат рядом:
 //поменяешь формат в одном месте — второе перестанет компилироваться вместе с ним.
@@ -34,7 +34,13 @@ export interface ListAction {
 //Одна таблица на обе стороны: encode читает её слева направо, decode справа налево,
 //и разъехаться им негде.
 const VIEW_CODE: Record<ListView, string> = {catalog: "c", mine: "m"};
-const ACTION_CODE: Record<ListActionType, string> = {toggle: "t", page: "p"};
+const ACTION_CODE: Record<ListActionType, string> = {toggle: "t", page: "p", open: "o"};
+
+//Что делает нажатие на сервер — зависит от списка, и это тоже таблица, а не тернарник:
+//добавится третий список, компилятор потребует решить, как он себя ведёт.
+//В каталоге нажатие означает «слежу / не слежу» — быстрый путь, ломать его нельзя.
+//В своих подписках сервер уже выбран, поэтому нажатие открывает его настройки.
+const SERVER_BUTTON_ACTION: Record<ListView, ListActionType> = {catalog: "toggle", mine: "open"};
 
 //По чему бот узнаёт свою кнопку среди чужих. Собирается из тех же таблиц, а не пишется руками:
 //иначе новый код действия пришлось бы вписывать в два места, и забытое второе означало бы
@@ -141,9 +147,12 @@ function renderText(page: ServerListPage): string {
     }
 
     lines.push("");
+    //Подсказка обязана совпадать с тем, что реально делает нажатие: в каталоге это «слежу /
+    //не слежу», в своих подписках — карточка сервера. Иначе человек не узнает про настройки,
+    //пока случайно не нажмёт.
     lines.push(page.view === "catalog"
-        ? "Нажми на сервер, чтобы подписаться или отписаться."
-        : "Нажми на сервер, чтобы отписаться.");
+        ? "Нажми на сервер, чтобы начать или перестать следить.\nЧто именно присылать — настраивается в /my."
+        : "Нажми на сервер — настроить уведомления или отписаться.");
 
     return lines.join("\n");
 }
@@ -163,7 +172,7 @@ function renderKeyboard(page: ServerListPage): InlineKeyboard {
         keyboard
             .text(`${mark} ${server.name}`, encodeAction({
                 view: page.view,
-                action: "toggle",
+                action: SERVER_BUTTON_ACTION[page.view],
                 serverId: server.id,
                 page: page.page,
                 search: page.search,

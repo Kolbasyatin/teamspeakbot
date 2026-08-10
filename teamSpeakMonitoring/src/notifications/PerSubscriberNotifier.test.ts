@@ -60,6 +60,7 @@ test("событие уходит каждому подписчику серве
     const byChat = new Map<number, RecordingNotifier>();
     const notifier = new PerSubscriberNotifier<StatusEvent>(
         subscribers({1: [100, 200]}),
+        "availability",
         event => event.snapshot.config.id,
         chatId => {
             const recording = createRecording();
@@ -78,6 +79,7 @@ test("без подписчиков не доставляется никому",
     let created = 0;
     const notifier = new PerSubscriberNotifier<StatusEvent>(
         subscribers({}),
+        "availability",
         event => event.snapshot.config.id,
         () => {
             created += 1;
@@ -97,6 +99,7 @@ test("нотифаер чата создаётся один раз и переи
     let created = 0;
     const notifier = new PerSubscriberNotifier<StatusEvent>(
         subscribers({1: [100]}),
+        "availability",
         event => event.snapshot.config.id,
         () => {
             created += 1;
@@ -116,6 +119,7 @@ test("память дедупликации у каждого подписчик
     const byChat = new Map<number, RecordingNotifier>();
     const notifier = new PerSubscriberNotifier<StatusEvent>(
         subscribers({1: [100, 200]}),
+        "availability",
         event => event.snapshot.config.id,
         chatId => {
             const recording = createRecording();
@@ -146,6 +150,7 @@ test("отказ одному не мешает доставке остальн�
     const byChat = new Map<number, RecordingNotifier>();
     const notifier = new PerSubscriberNotifier<StatusEvent>(
         subscribers({1: [100, 200]}),
+        "availability",
         event => event.snapshot.config.id,
         chatId => {
             const recording = createRecording();
@@ -168,6 +173,7 @@ test("подписчики читаются на каждое событие", a
     const byChat = new Map<number, RecordingNotifier>();
     const notifier = new PerSubscriberNotifier<StatusEvent>(
         {findSubscriberChatIds: (serverId: number): Promise<number[]> => Promise.resolve(byServer[serverId] ?? [])},
+        "availability",
         event => event.snapshot.config.id,
         chatId => {
             const recording = createRecording();

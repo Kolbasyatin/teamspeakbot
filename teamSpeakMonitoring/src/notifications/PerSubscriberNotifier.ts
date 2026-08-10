@@ -1,9 +1,10 @@
 import type {Notifier, NotificationEventOf, NotificationEventType} from "./events.js";
+import type {SubscriptionEventKind} from "../telegram/SubscriptionEvent.js";
 
 //Кто подписан на сервер. Интерфейс объявлен здесь, у потребителя: рассылке нужен ровно один
 //вопрос, а не весь репозиторий подписок.
 export interface SubscriberSource {
-    findSubscriberChatIds(serverId: number): Promise<number[]>;
+    findSubscriberChatIds(serverId: number, kind: SubscriptionEventKind): Promise<number[]>;
 }
 
 //Обёртка, превращающая ОДНО событие про сервер в доставку КАЖДОМУ его подписчику.
@@ -28,6 +29,10 @@ export class PerSubscriberNotifier<TType extends NotificationEventType> implemen
 
     constructor(
         private readonly subscribers: SubscriberSource,
+        //Какой тип уведомления рассылается. Подписка на сервер и подписка на конкретный вид
+        //уведомлений — разные вещи: человек может следить за сервером, но не хотеть знать
+        //про каждый конец раунда.
+        private readonly kind: SubscriptionEventKind,
         //Про какой сервер событие. Лямбдой, потому что у разных событий поле лежит по-разному —
         //ровно как в ChangesOnlyNotifier.
         private readonly serverIdOf: (event: NotificationEventOf<TType>) => number,
@@ -38,7 +43,7 @@ export class PerSubscriberNotifier<TType extends NotificationEventType> implemen
     }
 
     public async notify(event: NotificationEventOf<TType>): Promise<void> {
-        const chatIds = await this.subscribers.findSubscriberChatIds(this.serverIdOf(event));
+        const chatIds = await this.subscribers.findSubscriberChatIds(this.serverIdOf(event), this.kind);
 
         //Promise.all, а не allSettled: отказ обязан дойти до NotificationDispatcher и попасть в лог.
         //Дубликатов это не создаёт — у каждого адресата своя память, и успешные доставки её уже

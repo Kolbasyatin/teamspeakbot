@@ -1,5 +1,10 @@
 import {type Pool} from "mariadb";
 import type {TelegramChat, TelegramChatType} from "../telegram/TelegramChat.js";
+import {
+    DEFAULT_SUBSCRIPTION_EVENTS,
+    isSubscriptionEventKind,
+    type SubscriptionEventKind,
+} from "../telegram/SubscriptionEvent.js";
 
 type ChatRow = {
     chatId: number | bigint;
@@ -13,6 +18,10 @@ type ServerIdRow = {
 
 type ChatIdRow = {
     chatId: number | bigint;
+};
+
+type EventKindRow = {
+    eventKind: string;
 };
 
 //Чтение и запись подписок — и ничего сверх того. Здесь нет ни решения «кого опрашивать»,
@@ -73,14 +82,80 @@ export class SubscriptionRepository {
     //двойной тап по кнопке приводил бы к двум сообщениям на каждое падение сервера.
     //Ставка на UNIQUE (server_id, chat_id) из миграции 006, а не на предварительный SELECT:
     //проверка перед вставкой не атомарна, и два одновременных нажатия её обходят.
+    //
+    //Типы уведомлений по умолчанию проставляются ТОЛЬКО при создании подписки. INSERT IGNORE
+    //отдаёт insertId = 0, когда строка уже была, и это здесь не формальность: иначе повторный
+    //вызов вернул бы человеку галочки, которые он сам снял.
     public async subscribe(chatId: number, serverId: number): Promise<void> {
-        await this.pool.query(
+        const inserted = await this.pool.query(
             `
-                INSERT INTO server_subscriptions (server_id, chat_id)
+                INSERT IGNORE INTO server_subscriptions (server_id, chat_id)
                 VALUES (?, ?)
-                ON DUPLICATE KEY UPDATE id = id
             `,
             [serverId, chatId],
+        );
+
+        const subscriptionId = Number(inserted.insertId);
+
+        if (subscriptionId === 0) {
+            return;
+        }
+
+        for (const kind of DEFAULT_SUBSCRIPTION_EVENTS) {
+            await this.pool.query(
+                `
+                    INSERT IGNORE INTO server_subscription_events (subscription_id, event_kind)
+                    VALUES (?, ?)
+                `,
+                [subscriptionId, kind],
+            );
+        }
+    }
+
+    //Какие уведомления включены у этой подписки. Неизвестные значения отсеиваются: в колонке
+    //строка, и после переименования типа там может остаться то, чего в коде уже нет.
+    public async findSubscriptionEvents(
+        chatId: number,
+        serverId: number,
+    ): Promise<SubscriptionEventKind[]> {
+        const rows = await this.pool.query<EventKindRow[]>(
+            `
+                SELECT event.event_kind AS eventKind
+                FROM server_subscription_events event
+                         JOIN server_subscriptions subscription ON subscription.id = event.subscription_id
+                WHERE subscription.chat_id = ?
+                  AND subscription.server_id = ?
+            `,
+            [chatId, serverId],
+        );
+
+        return rows.map(row => row.eventKind).filter(isSubscriptionEventKind);
+    }
+
+    public async enableEvent(chatId: number, serverId: number, kind: SubscriptionEventKind): Promise<void> {
+        await this.pool.query(
+            `
+                INSERT IGNORE INTO server_subscription_events (subscription_id, event_kind)
+                SELECT id, ?
+                FROM server_subscriptions
+                WHERE chat_id = ?
+                  AND server_id = ?
+            `,
+            [kind, chatId, serverId],
+        );
+    }
+
+    public async disableEvent(chatId: number, serverId: number, kind: SubscriptionEventKind): Promise<void> {
+        await this.pool.query(
+            `
+                DELETE event
+                FROM server_subscription_events event
+                         JOIN server_subscriptions subscription ON subscription.id = event.subscription_id
+                WHERE subscription.chat_id = ?
+                  AND subscription.server_id = ?
+                  AND event.event_kind = ?
+            `,
+            [chatId, serverId, kind],
         );
     }
 
@@ -114,16 +189,23 @@ export class SubscriptionRepository {
         return rows.map(row => Number(row.serverId));
     }
 
-    //«Кто подписан на этот сервер» — обратная сторона той же связи, нужна рассылке.
-    public async findSubscriberChatIds(serverId: number): Promise<number[]> {
+    //«Кто подписан на этот сервер ВОТ НА ЭТОТ тип уведомления» — обратная сторона той же связи,
+    //нужна рассылке. Тип обязателен: без него рассылка о конце раунда уходила бы и тем,
+    //кто просил только про падения.
+    public async findSubscriberChatIds(
+        serverId: number,
+        kind: SubscriptionEventKind,
+    ): Promise<number[]> {
         const rows = await this.pool.query<ChatIdRow[]>(
             `
-                SELECT chat_id AS chatId
-                FROM server_subscriptions
-                WHERE server_id = ?
-                ORDER BY chat_id
+                SELECT subscription.chat_id AS chatId
+                FROM server_subscriptions subscription
+                         JOIN server_subscription_events event
+                              ON event.subscription_id = subscription.id AND event.event_kind = ?
+                WHERE subscription.server_id = ?
+                ORDER BY subscription.chat_id
             `,
-            [serverId],
+            [kind, serverId],
         );
 
         return rows.map(row => Number(row.chatId));

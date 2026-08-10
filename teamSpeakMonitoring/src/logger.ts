@@ -8,10 +8,12 @@ const defaultLevel = isDev ? "debug" : "info";
 //и stack у Error неперечисляемые, и в логе оставалось "error": {}.
 const errorKey = "error";
 
+//Время пишем сами. Полагаться на то, что его проставит journald или docker, нельзя: снаружи
+//контейнера этого никто не делает, а лог у нас — единственная история состояния серверов,
+//и без времени по нему нельзя восстановить ни динамику, ни момент падения.
 export const log = pino({
     level: process.env.LOG_LEVEL ?? defaultLevel,
     base: null,
-    timestamp: false,
     errorKey,
     ...(isDev ? {
             transport: {

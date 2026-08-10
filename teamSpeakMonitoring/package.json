@@ -13,7 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "pretest:unit": "npm run typecheck",
     "test": "NODE_ENV=test tsx --import dotenv-flow/config --test --test-concurrency=1 src/*/*.test.ts",
-    "test:unit": "NODE_ENV=test tsx --test src/monitoring/*.test.ts src/notifications/*.test.ts src/queriers/*.test.ts src/teamspeak/*.test.ts src/telegram/*.test.ts src/persistence/parseQueryConfig.test.ts src/persistence/Migrator.test.ts",
+    "test:unit": "NODE_ENV=test tsx --test src/monitoring/*.test.ts src/notifications/*.test.ts src/queriers/*.test.ts src/teamspeak/*.test.ts src/telegram/*.test.ts src/rounds/*.test.ts src/persistence/parseQueryConfig.test.ts src/persistence/Migrator.test.ts",
     "test:repo": "NODE_ENV=test tsx --import dotenv-flow/config --test --test-concurrency=1 src/persistence/*.test.ts"
   },
   "keywords": [
