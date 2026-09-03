@@ -100,8 +100,9 @@ sudo systemctl restart teamspeak6
 `--env-file` обязателен в любой ручной команде compose: без него не подставятся
 `${TS_DB_PASSWORD}` и остальные пароли. Юнит его подставляет сам.
 
-Образ приложения собирается отдельно — workflow `Build Docker Images` в GitHub Actions
-(ручной запуск) и публикуется в GHCR.
+Образ приложения собирается workflow'ом `Build Docker Images` в GitHub Actions: автоматически
+при каждом push в `master`, затронувшем `teamSpeakMonitoring/` (после typecheck и unit-тестов),
+или вручную через «Run workflow». Публикуется в GHCR тегами `latest` и `sha-<коммит>`.
 
 ### Соседний сервис: токен Bohemia
 

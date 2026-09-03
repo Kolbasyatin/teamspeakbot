@@ -31,7 +31,8 @@
   env/*.env.example          шаблоны конфигов; настоящие *.env гитигнорятся
   Dockerfile                 node:22-trixie + git — образ для дев-сервиса app
 .github/workflows/
-  docker-build.yml           workflow_dispatch → build & push ghcr.io/<repo>/tsbot-monitor
+  docker-build.yml           push в master (paths: teamSpeakMonitoring/**) или workflow_dispatch →
+                             typecheck + unit-тесты → build & push ghcr.io/<repo>/tsbot-monitor
 sinusbot.http                ручные HTTP-запросы (SinusBot API, admin endpoints, Telegram, armahq)
 http-client.env.json         окружения для .http (prod/dev); приватные значения — в
                              http-client.private.env.json (gitignored)
@@ -663,8 +664,12 @@ npm run test:repo  # только src/persistence/*.test.ts
 
 - `teamSpeakMonitoring/Dockerfile` — multi-stage: build (`npm ci` + `tsc`) → runtime (`npm ci --omit=dev`
   + `dist/`), `USER node`, `NODE_ENV=production`, `CMD node dist/main.js`.
-- Сборка образа — GitHub Actions `docker-build.yml`, запуск **только вручную** (`workflow_dispatch`,
-  input `service=monitor`). Публикует `ghcr.io/<repo>/tsbot-monitor:latest` и `:sha-<sha>`.
+- Сборка образа — GitHub Actions `docker-build.yml`: **сам при push в master**, если менялось
+  что-то в `teamSpeakMonitoring/` или сам workflow (документация и `.docker/` сборку не запускают),
+  плюс ручной `workflow_dispatch`. Перед сборкой гоняет `npm run test:unit` (с typecheck): красные
+  тесты в GHCR не попадают. Публикует `ghcr.io/<repo>/tsbot-monitor:latest` и `:sha-<sha>`.
+  Сервер образ **не подтягивает сам**: обновление — `docker compose pull` + `systemctl restart`
+  (см. `.docker/README.md`).
 - Prod-compose лежит в репозитории: `.docker/compose.prod.yaml` — TeamSpeak 6, MariaDB и
   `tsbot-monitor` из GHCR. Имя проекта, имена контейнеров, томов и порты сохранены один в один
   с тем вариантом, который уже работает на сервере, иначе docker создал бы новые тома и прод потерял

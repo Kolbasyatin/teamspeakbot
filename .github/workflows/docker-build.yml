@@ -1,15 +1,23 @@
+# Собирает образ tsbot-monitor и публикует в GHCR.
+#
+# Запускается сам при push в master, если менялось приложение или этот файл; остальное
+# (документация, .docker/, http-файлы) образ не меняет и сборку не запускает.
+# Ручной запуск (workflow_dispatch) оставлен для пересборки без коммита.
+#
+# Перед сборкой — typecheck и unit-тесты: образ с красными тестами в GHCR попадать не должен.
+# Интеграционные тесты (нужна MariaDB) здесь не гоняются.
+#
+# Теги: latest и sha-<полный SHA коммита> — по SHA можно откатиться, поменяв тег в compose.prod.yaml.
+
 name: Build Docker Images
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - "teamSpeakMonitoring/**"
+      - ".github/workflows/docker-build.yml"
   workflow_dispatch:
-    inputs:
-      service:
-        description: "Service to build"
-        required: true
-        default: "monitor"
-        type: choice
-        options:
-          - monitor
 
 permissions:
   contents: read
@@ -22,11 +30,26 @@ jobs:
   build-monitor:
     name: Build monitor image
     runs-on: ubuntu-latest
-    if: ${{ inputs.service == 'monitor' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: teamSpeakMonitoring/package-lock.json
+
+      - name: Install dependencies
+        working-directory: teamSpeakMonitoring
+        run: npm ci
+
+      - name: Typecheck and unit tests
+        working-directory: teamSpeakMonitoring
+        # pretest:unit запускает typecheck сам, отдельного шага не нужно.
+        run: npm run test:unit
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -40,6 +63,7 @@ jobs:
 
       - name: Prepare image name
         id: image
+        # GHCR требует имя в нижнем регистре, а GITHUB_REPOSITORY сохраняет регистр владельца.
         run: echo "repository=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
