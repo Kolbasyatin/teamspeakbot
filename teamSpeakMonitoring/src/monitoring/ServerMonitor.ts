@@ -3,6 +3,7 @@ import {EventEmitter} from "node:events";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
 import type {Querier, QuerierRegistry, ServerQueryConfig} from "./ServerQuery.js";
 import {pollServerSources} from "./pollServerSources.js";
+import {SecondarySourceThrottle} from "./SecondarySourceThrottle.js";
 import {type ScheduledTask, Scheduler} from "./Scheduler.js";
 import {type MonitorProperties} from "../properties.js";
 import type {Logger} from "pino";
@@ -33,6 +34,9 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     //Создаётся в конструкторе, а не инициализатором поля: инициализаторы полей выполняются
     //раньше, чем присваиваются параметры-свойства, и logger там был бы ещё undefined.
     private readonly scheduler: Scheduler<ScheduledTask>;
+    //Память «когда какой второстепенный источник опрашивался» живёт здесь, потому что живёт
+    //столько же, сколько probes: pollServerSources чиста от тика к тику и помнить ничего не может.
+    private readonly secondaryThrottle: SecondarySourceThrottle;
 
     public constructor(
         private readonly options: MonitorProperties,
@@ -43,6 +47,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     ) {
         super();
         this.scheduler = new Scheduler<ScheduledTask>(this.logger);
+        this.secondaryThrottle = new SecondarySourceThrottle(options.secondaryPollIntervalMs);
     }
     
     public start(): void {
@@ -54,10 +59,13 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         this.logger.debug(`Poll сервера ${probe.getServerName()} с периодом ${this.getNextPollDelayMs(probe)} мс.`);
         const config: ServerMonitorConfig = probe.getSnapshot().config;
         //Монитор знает, каким querier'ом опрашивать источник; сколько кого ждать и как сводить
-        //ответы — дело pollServerSources.
+        //ответы — дело pollServerSources; как часто беспокоить второстепенные — троттлинга.
         const result = await pollServerSources(
             config,
-            source => this.getQuerier(source.query.type).query(source.query),
+            this.secondaryThrottle.wrap(
+                source => this.getQuerier(source.query.type).query(source.query),
+                config,
+            ),
             this.options.secondaryGraceMs,
             this.logger,
         );
@@ -83,7 +91,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         }
         //Синк с шедулером
         this.scheduler.sync(this.getScheduledTasks());
-
+        this.secondaryThrottle.retain(servers);
     }
 
     public syncServers(servers: ServerMonitorConfig[]): void {
@@ -115,6 +123,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         }
         //Синк с шедулером
         this.scheduler.sync(this.getScheduledTasks());
+        this.secondaryThrottle.retain(servers);
     }
 
     public stop(): void {

@@ -14,6 +14,7 @@ export function summarizeForLog(snapshots: readonly ServerProbeSnapshot[]): unkn
         status: server.status,
         players: server.currentInfo?.players,
         maxPlayers: server.currentInfo?.maxPlayers,
+        queueSize: server.currentInfo?.queueSize,
     }));
 }
 

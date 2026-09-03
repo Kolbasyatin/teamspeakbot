@@ -1,5 +1,5 @@
 import type {ServerMonitorConfig, ServerQuerySource} from "../monitoring/MonitoredServer.js";
-import type {ServerQueryConfig} from "../monitoring/ServerQuery.js";
+import type {ServerQueryConfig, ServerQueryResult} from "../monitoring/ServerQuery.js";
 import type {ServerProbeSnapshot, ServerStatus} from "../monitoring/ServerProbe.js";
 
 //Готовый ServerMonitorConfig для тестов, которым он нужен целиком, но безразличен по содержанию:
@@ -35,6 +35,7 @@ export function serverConfigFixture(
 //Готовый снапшот probe. Нужен всем, кто стоит НИЖЕ монитора: после переноса проекции
 //к потребителям уведомления получают снапшоты, и собирать их руками в каждом тесте — шум.
 //players не задан — значит данных нет: так выглядит и offline, и живой сервер без полей.
+//info — остальные поля результата (очередь, сценарий, свежесть) поверх players/maxPlayers.
 export function snapshotFixture(
     overrides: {
         id?: number;
@@ -42,6 +43,7 @@ export function snapshotFixture(
         status?: ServerStatus;
         players?: number;
         maxPlayers?: number;
+        info?: ServerQueryResult;
     } = {},
 ): ServerProbeSnapshot {
     const players = overrides.players;
@@ -58,7 +60,7 @@ export function snapshotFixture(
         failedChecks: 0,
         currentInfo: players === undefined
             ? undefined
-            : {players, maxPlayers: overrides.maxPlayers ?? 64},
+            : {players, maxPlayers: overrides.maxPlayers ?? 64, ...overrides.info},
         statusSince: new Date(0),
     };
 }

@@ -100,3 +100,51 @@ test("кнопка обновления есть всегда, в том чис�
         ["🔄 Обновить"],
     );
 });
+
+test("очередь показывается отдельной строкой со свежестью данных", () => {
+    //Свежесть стоит у очереди, а не у игроков: игроки приезжают по A2S с каждым опросом,
+    //очередь — из каталога Bohemia с задержкой heartbeat'а.
+    const text = renderServerStatus(
+        [snapshotFixture({
+            id: 1, name: "Первый", status: "online", players: 128, maxPlayers: 128,
+            info: {queueSize: 7, queueMaxSize: 50, dataUpdatedAt: NOW.getTime() - 3 * 60 * 1000},
+        })],
+        [],
+        NOW,
+    ).text;
+
+    assert.match(text, /👥 128\/128 {3}⏱ 2 часа 15 минут\n⏳ очередь 7\/50 · 3 минуты назад/);
+});
+
+test("пустая очередь — самостоятельный факт, данные моложе минуты — «только что»", () => {
+    const text = renderServerStatus(
+        [snapshotFixture({
+            id: 1, name: "Первый", status: "online", players: 128, maxPlayers: 128,
+            info: {queueSize: 0, dataUpdatedAt: NOW.getTime() - 20 * 1000},
+        })],
+        [],
+        NOW,
+    ).text;
+
+    assert.match(text, /⏳ без очереди · только что/);
+});
+
+test("без источника очереди строки про очередь нет", () => {
+    const text = renderServerStatus(
+        [snapshotFixture({id: 1, name: "Первый", status: "online", players: 27, maxPlayers: 64})],
+        [],
+        NOW,
+    ).text;
+
+    assert.doesNotMatch(text, /⏳/);
+});
+
+test("очередь без свежести показывается без хвоста", () => {
+    const text = renderServerStatus(
+        [snapshotFixture({id: 1, name: "Первый", status: "online", players: 1, info: {queueSize: 3}})],
+        [],
+        NOW,
+    ).text;
+
+    assert.match(text, /⏳ очередь 3\n/);
+});

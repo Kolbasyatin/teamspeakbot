@@ -145,3 +145,27 @@ test("отказ сети приравнивается к неудачному �
 
     assert.equal(await query(), undefined);
 });
+
+test("строковое поле читается строкой, а числовое — числом; перепутанные типы пропускаются", async () => {
+    //Тип каждого поля задаёт словарь домена, карта задаёт только имена: "12" в players — сломанный
+    //эндпоинт, 5 в scenarioName — тоже, и оба молча не чинятся.
+    stubFetch({body: {scenario: "Командующий - Колгуев", players: "12", queue: {size: 4}, code: 5}});
+
+    assert.deepEqual(
+        await query({scenarioName: "scenario", players: "players", queueSize: "queue.size", directJoinCode: "code"}),
+        {scenarioName: "Командующий - Колгуев", queueSize: 4},
+    );
+});
+
+test("пустая строка равнозначна отсутствию поля", async () => {
+    stubFetch({body: {scenario: "", players: 3}});
+
+    assert.deepEqual(await query({scenarioName: "scenario", players: "players"}), {players: 3});
+});
+
+test("чужой конфиг — ошибка проводки, а не тихий undefined", async () => {
+    await assert.rejects(
+        () => new RestQuerier(silentLogger).query({type: "a2s", host: "127.0.0.1", port: 1, timeout: 1}),
+        /Querier for "rest" received a "a2s" query config/,
+    );
+});

@@ -16,6 +16,8 @@ const monitorProperties: MonitorProperties = {
     maxFailedChecks: 3,
     //Второстепенных источников в этих тестах нет, поэтому окно ожидания никого не задерживает.
     secondaryGraceMs: 50,
+    //Троттлинг второстепенных здесь не проверяется — у него свои тесты.
+    secondaryPollIntervalMs: 0,
 };
 
 //Сервер с единственным источником: пока опрашивается только главный, остальным тестам монитора
@@ -82,7 +84,7 @@ function wait(delayMs: number): Promise<void> {
 test("монитор выбирает querier по типу запроса", async () => {
     const a2s = createQuerier({players: 10, maxPlayers: 64});
     const rest = createQuerier({players: 3, maxPlayers: 32});
-    const monitor = createMonitor({a2s, rest});
+    const monitor = createMonitor({a2s, rest, bohemia: createQuerier(undefined)});
 
     monitor.syncServers([a2sServer(1, "A2S server"), restServer(2, "REST server")]);
     monitor.start();
@@ -97,7 +99,7 @@ test("монитор выбирает querier по типу запроса", asy
 
 test("querier получает конфиг именно своего сервера", async () => {
     const a2s = createQuerier({players: 1, maxPlayers: 2});
-    const monitor = createMonitor({a2s, rest: createQuerier(undefined)});
+    const monitor = createMonitor({a2s, rest: createQuerier(undefined), bohemia: createQuerier(undefined)});
 
     monitor.syncServers([a2sServer(5, "Fifth")]);
     monitor.start();
@@ -117,6 +119,7 @@ test("результат опроса попадает в состояние", a
     const monitor = createMonitor({
         a2s: createQuerier({players: 17, maxPlayers: 64}),
         rest: createQuerier(undefined),
+        bohemia: createQuerier(undefined),
     });
     monitor.on("stateUpdated", snapshots => updates.push(snapshots));
 
@@ -138,9 +141,9 @@ test("состояние эмитится после каждого опроса
     let updates = 0;
     const monitor = new ServerMonitor(
         //Тут опрос частый: нужно несколько тактов с одинаковым результатом.
-        {pollIntervalMs: 10, suspiciousPollIntervalMs: 10, maxFailedChecks: 3, secondaryGraceMs: 50},
+        {pollIntervalMs: 10, suspiciousPollIntervalMs: 10, maxFailedChecks: 3, secondaryGraceMs: 50, secondaryPollIntervalMs: 0},
         silentLogger,
-        {a2s: createQuerier({players: 5, maxPlayers: 64}), rest: createQuerier(undefined)},
+        {a2s: createQuerier({players: 5, maxPlayers: 64}), rest: createQuerier(undefined), bohemia: createQuerier(undefined)},
     );
     monitor.on("stateUpdated", () => {
         updates += 1;
@@ -164,9 +167,9 @@ test("неизвестный тип запроса не мешает опрос�
     );
     const a2s = createQuerier({players: 1, maxPlayers: 2});
     const monitor = new ServerMonitor(
-        {pollIntervalMs: 15, suspiciousPollIntervalMs: 15, maxFailedChecks: 3, secondaryGraceMs: 50},
+        {pollIntervalMs: 15, suspiciousPollIntervalMs: 15, maxFailedChecks: 3, secondaryGraceMs: 50, secondaryPollIntervalMs: 0},
         silentLogger,
-        {a2s, rest: createQuerier(undefined)},
+        {a2s, rest: createQuerier(undefined), bohemia: createQuerier(undefined)},
     );
 
     monitor.syncServers([a2sServer(1, "Healthy server"), brokenServer]);
@@ -181,7 +184,7 @@ test("неизвестный тип запроса не мешает опрос�
 
 test("syncServers добавляет и удаляет серверы из опроса", async () => {
     const a2s = createQuerier({players: 1, maxPlayers: 2});
-    const monitor = createMonitor({a2s, rest: createQuerier(undefined)});
+    const monitor = createMonitor({a2s, rest: createQuerier(undefined), bohemia: createQuerier(undefined)});
 
     monitor.syncServers([a2sServer(1, "First")]);
     monitor.start();

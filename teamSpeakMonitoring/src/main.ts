@@ -2,6 +2,8 @@ import "dotenv-flow/config";
 import {ServerMonitor} from "./monitoring/ServerMonitor.js";
 import {A2sQuerier} from "./queriers/A2sQuerier.js";
 import {RestQuerier} from "./queriers/RestQuerier.js";
+import {BohemiaLobbyQuerier} from "./queriers/BohemiaLobbyQuerier.js";
+import {BiTokenProvider} from "./queriers/BiTokenProvider.js";
 import {log} from "./logger.js";
 import {AdminServer} from "./admin/AdminServer.js";
 import {ServerRepository} from "./persistence/ServerRepository.js";
@@ -16,6 +18,7 @@ import {
     stateSyncProperties,
     roundFinishProperties,
     teamSpeakChannelNames,
+    bohemiaProperties,
 } from "./properties.js";
 import {notifierConfig} from "./notifierConfig.js";
 import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js";
@@ -87,9 +90,18 @@ const startupDbRetry = {
 async function main(): Promise<any> {
     //Реализации опроса живут здесь: монитор про протоколы не знает. Добавление типа запроса
     //в ServerQueryConfig валит сборку, пока сюда не добавят его querier.
+    //Токен Bohemia один на процесс: его добывает соседний сервис arma-reforger-hz, а здесь он
+    //только кэшируется и раздаётся всем bohemia-источникам. Пустой BOHEMIA_TOKEN_URL — источники
+    //этого типа молчат, остальное работает как раньше.
+    const biTokens = new BiTokenProvider({
+        url: bohemiaProperties.tokenUrl,
+        timeoutMs: bohemiaProperties.tokenTimeoutMs,
+        refreshLeadMs: bohemiaProperties.tokenRefreshLeadMs,
+    }, log);
     const monitor: ServerMonitor = new ServerMonitor(monitorProperties, log, {
         a2s: new A2sQuerier(log),
         rest: new RestQuerier(log),
+        bohemia: new BohemiaLobbyQuerier(bohemiaProperties, biTokens, log),
     });
     //Одно query-подключение к TeamSpeak на процесс: его делят нотифаер и команды бота.
     const teamSpeakConnection = new TeamSpeakConnection(properties, log);

@@ -32,6 +32,7 @@ const STATUS_MARK = {
 
 const PLAYERS = "👥";
 const CLOCK = "⏱";
+const QUEUE = "⏳";
 
 //Единственная кнопка этого сообщения, поэтому и протокол у неё вырожденный — одна константа.
 //Разбирать нечего: что нажали, известно из самого факта нажатия.
@@ -99,7 +100,46 @@ function renderEntry(snapshot: ServerProbeSnapshot, now: Date): string {
         return `${title}\n${PLAYERS} нет данных   ${since}`;
     }
 
-    return `${title}\n${PLAYERS} ${players}/${maxPlayers}   ${since}`;
+    return [`${title}\n${PLAYERS} ${players}/${maxPlayers}   ${since}`, renderQueue(snapshot, now)]
+        .filter(line => line !== "")
+        .join("\n");
+}
+
+//Строка про очередь. Появляется, только если источник очереди вообще ответил: нет поля —
+//нет строки, а не «очереди нет». Пустая очередь при этом показывается: у полного сервера
+//это самостоятельный факт («128/128, но зайти можно сразу»).
+//
+//Свежесть стоит именно здесь, а не у игроков: игроки приезжают по A2S прямо с сервера
+//на каждом опросе, а очередь — из каталога Bohemia с задержкой heartbeat'а и опрашивается
+//реже. Возраст считается по dataUpdatedAt источника, который очередь и принёс.
+function renderQueue(snapshot: ServerProbeSnapshot, now: Date): string {
+    const info = snapshot.currentInfo;
+    const size = info?.queueSize;
+
+    if (size === undefined) {
+        return "";
+    }
+
+    const queue = size === 0
+        ? "без очереди"
+        : `очередь ${size}${info?.queueMaxSize === undefined ? "" : `/${info.queueMaxSize}`}`;
+    const freshness = info?.dataUpdatedAt === undefined
+        ? ""
+        : ` · ${formatAge(new Date(info.dataUpdatedAt), now)}`;
+
+    return `${QUEUE} ${queue}${freshness}`;
+}
+
+//Возраст данных. Моложе минуты — «только что»: секунды здесь точность ложная, каталог сам
+//обновляется с шагом в десятки секунд.
+function formatAge(dataUpdatedAt: Date, now: Date): string {
+    const duration = formatDuration(intervalToDuration({start: dataUpdatedAt, end: now}), {
+        locale: ru,
+        format: ["days", "hours", "minutes"],
+        zero: false,
+    });
+
+    return duration ? `${duration} назад` : "только что";
 }
 
 //Сколько длится текущий статус.

@@ -77,6 +77,7 @@ export interface MonitorProperties {
     suspiciousPollIntervalMs: number;
     maxFailedChecks: number;
     secondaryGraceMs: number;
+    secondaryPollIntervalMs: number;
 }
 
 const monitorConfig = convict<MonitorProperties>({
@@ -106,6 +107,82 @@ const monitorConfig = convict<MonitorProperties>({
         format: "nat",
         default: 1_000,
         env: "MONITOR_SECONDARY_GRACE_MS",
+    },
+    //Нижняя граница между двумя опросами одного второстепенного источника. Тик сервера при этом
+    //один: второстепенный, опрошенный недавно, отдаёт в слияние прошлый ответ (см.
+    //SecondarySourceThrottle). Ноль — опрашивать второстепенные каждый тик, как главный.
+    //Умолчание подобрано по каталогу Bohemia: данные там обновляются heartbeat'ом сервера
+    //с шагом в десятки секунд, чаще спрашивать нечего.
+    secondaryPollIntervalMs: {
+        doc: "Minimum interval between two polls of the same secondary source; 0 polls every tick",
+        format: "nat",
+        default: 30_000,
+        env: "MONITOR_SECONDARY_POLL_INTERVAL_MS",
+    },
+});
+
+//Каталог серверов Bohemia: соседний сервис с токеном и протокольные константы игры.
+//Всё, что одинаково для всех серверов, лежит здесь, а не в строках источников: вышел патч —
+//правится одна переменная. Пустой tokenUrl выключает bohemia-источники целиком (см. BiTokenProvider).
+export interface BohemiaProperties {
+    tokenUrl: string;
+    tokenTimeoutMs: number;
+    tokenRefreshLeadMs: number;
+    lobbyUrl: string;
+    userAgent: string;
+    clientVersion: string;
+    platformId: string;
+    gameClientType: string;
+}
+
+const bohemiaConfig = convict<BohemiaProperties>({
+    tokenUrl: {
+        doc: "GET endpoint of the arma-reforger-hz token service; empty disables bohemia sources",
+        format: String,
+        default: "",
+        env: "BOHEMIA_TOKEN_URL",
+    },
+    tokenTimeoutMs: {
+        doc: "Timeout for the token service request in milliseconds",
+        format: "nat",
+        default: 3_000,
+        env: "BOHEMIA_TOKEN_TIMEOUT_MS",
+    },
+    tokenRefreshLeadMs: {
+        doc: "How long before expiresAt the cached token is treated as expired",
+        format: "nat",
+        default: 60_000,
+        env: "BOHEMIA_TOKEN_REFRESH_LEAD_MS",
+    },
+    lobbyUrl: {
+        doc: "Bohemia lobby rooms/search endpoint",
+        format: String,
+        default: "https://api-ar-game.bistudio.com/game-api/api/v1.0/lobby/rooms/search",
+        env: "BOHEMIA_LOBBY_URL",
+    },
+    userAgent: {
+        doc: "User-Agent of the game client; Bohemia checks it, changes with game patches",
+        format: String,
+        default: "Arma Reforger/1.8.0.10 (Client; Windows)",
+        env: "BOHEMIA_USER_AGENT",
+    },
+    clientVersion: {
+        doc: "clientVersion field of lobby requests; changes with game patches",
+        format: String,
+        default: "1.8.0",
+        env: "BOHEMIA_CLIENT_VERSION",
+    },
+    platformId: {
+        doc: "platformId field of lobby requests",
+        format: String,
+        default: "ReforgerSteam",
+        env: "BOHEMIA_PLATFORM_ID",
+    },
+    gameClientType: {
+        doc: "gameClientType field of lobby requests",
+        format: String,
+        default: "PLATFORM_PC",
+        env: "BOHEMIA_GAME_CLIENT_TYPE",
     },
 });
 
@@ -264,6 +341,7 @@ teamSpeakChannelsConfig.validate({allowed: "strict"});
 tgConfig.validate({allowed: "strict"});
 monitorConfig.validate({allowed: "strict"});
 stateSyncConfig.validate({allowed: "strict"});
+bohemiaConfig.validate({allowed: "strict"});
 
 export const properties: TeamSpeakProperties = config.getProperties();
 export const dbConfig = databaseConfig.getProperties()
@@ -273,3 +351,4 @@ export const tgProperties = tgConfig.getProperties();
 export const monitorProperties = monitorConfig.getProperties();
 export const stateSyncProperties = stateSyncConfig.getProperties();
 export const roundFinishProperties = roundFinishConfig.getProperties();
+export const bohemiaProperties = bohemiaConfig.getProperties();

@@ -1,11 +1,15 @@
-import type {
-    Querier,
-    QueryFieldMap,
-    RestQueryConfig,
-    ServerQueryConfig,
-    ServerQueryField,
-    ServerQueryResult,
+import {
+    narrowQueryConfig,
+    SERVER_QUERY_FIELDS,
+    type Querier,
+    type QueryFieldMap,
+    type RestQueryConfig,
+    type ServerQueryConfig,
+    type ServerQueryField,
+    type ServerQueryFieldKind,
+    type ServerQueryResult,
 } from "../monitoring/ServerQuery.js";
+import {fetchJson} from "./fetchJson.js";
 import type {Logger} from "pino";
 
 export class RestQuerier implements Querier {
@@ -13,28 +17,19 @@ export class RestQuerier implements Querier {
     }
 
     public async query(config: ServerQueryConfig): Promise<ServerQueryResult | undefined> {
-        const restConfig = config as RestQueryConfig;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), restConfig.timeout);
+        const restConfig = narrowQueryConfig(config, "rest");
 
         try {
-            const response = await fetch(restConfig.url, {
-                signal: controller.signal,
-                headers: {
-                    'Accept': 'application/json',
-                },
-            });
+            const response = await fetchJson(restConfig.url, {timeoutMs: restConfig.timeout});
 
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
 
-            return this.toQueryResult(await response.json(), restConfig);
+            return this.toQueryResult(response.body, restConfig);
         } catch (error) {
             this.logger.debug(`REST query failed for ${restConfig.url}: ${error instanceof Error ? error.message : String(error)}`);
             return undefined;
-        } finally {
-            clearTimeout(timeoutId);
         }
     }
 
@@ -72,15 +67,30 @@ export class RestQuerier implements Querier {
         for (const [field, path] of Object.entries(fields) as [ServerQueryField, string][]) {
             const value = readPath(body, path);
 
-            //Number.isFinite отсеивает строки, null, NaN и Infinity. Непригодное поле пропускается,
-            //а не портит весь ответ, и не приводится к числу молча: "42" строкой — это сломанный
-            //эндпоинт, и прятать его не нужно.
-            if (Number.isFinite(value)) {
+            //Непригодное поле пропускается, а не портит весь ответ, и не приводится к нужному типу
+            //молча: "42" строкой в числовом поле — это сломанный эндпоинт, и прятать его не нужно.
+            //Чего ждать от поля, знает словарь домена, имена — карта.
+            if (isUsable(value, SERVER_QUERY_FIELDS[field])) {
                 result[field] = value;
             }
         }
 
         return result as ServerQueryResult;
+    }
+}
+
+//Number.isFinite отсеивает строки, null, NaN и Infinity. Пустая строка приравнена к отсутствию
+//значения: показывать её нечем, а «поле есть, но пустое» для потребителя то же, что «поля нет».
+function isUsable(value: unknown, kind: ServerQueryFieldKind): boolean {
+    switch (kind) {
+        case "number":
+            return Number.isFinite(value);
+        case "string":
+            return typeof value === "string" && value !== "";
+        default: {
+            const unhandled: never = kind;
+            return unhandled;
+        }
     }
 }
 

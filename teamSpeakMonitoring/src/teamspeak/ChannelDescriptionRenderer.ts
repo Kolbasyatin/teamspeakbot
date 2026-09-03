@@ -37,8 +37,17 @@ export class ChannelDescriptionRenderer {
                     return `[color=#FFD166]${name}: unknown[/color]`;
                 }
 
-                return `[color=#66FF99]${name}: ${players}/${maxPlayers}[/color]`;
+                return `[color=#66FF99]${name}: ${players}/${maxPlayers}[/color]${renderQueue(server.currentInfo?.queueSize)}`;
             })
             .join("\n");
     }
+}
+
+//Очередь на вход — отдельным цветом и только когда она есть: «+0 в очереди» у полного сервера
+//не сообщает ничего, а у неполного невозможно. Неизвестная очередь (источник молчит или
+//не настроен) выглядит так же, как пустая: табло про причины не рассказывает.
+//Свежести данных здесь нет намеренно: возраст меняется каждую секунду и попал бы в ключ
+//дедупликации, после чего описание переписывалось бы на каждом тике.
+function renderQueue(queueSize: number | undefined): string {
+    return queueSize ? ` [color=#FFD166]+${queueSize} в очереди[/color]` : "";
 }

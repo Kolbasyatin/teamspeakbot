@@ -1,8 +1,8 @@
-import type {
-    A2sQueryConfig,
-    Querier,
-    ServerQueryConfig,
-    ServerQueryResult,
+import {
+    narrowQueryConfig,
+    type Querier,
+    type ServerQueryConfig,
+    type ServerQueryResult,
 } from "../monitoring/ServerQuery.js";
 import {type ServerInfo, SourceQuery} from "@callowayisweird/source-query";
 import type {Logger} from "pino";
@@ -14,7 +14,7 @@ export class A2sQuerier implements Querier {
     }
 
     public async query(config: ServerQueryConfig): Promise<ServerQueryResult | undefined> {
-        const a2sConfig = config as A2sQueryConfig;
+        const a2sConfig = narrowQueryConfig(config, "a2s");
         const query = new SourceQuery({
             host: a2sConfig.host,
             port: a2sConfig.port,

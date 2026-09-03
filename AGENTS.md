@@ -12,7 +12,7 @@
 `tsbot` (`teamSpeakMonitoring`) — долгоживущий daemon на Node.js/TypeScript. Он:
 
 1. читает список игровых серверов (Arma Reforger) из MariaDB;
-2. периодически опрашивает каждый сервер (A2S по UDP или REST);
+2. периодически опрашивает каждый сервер (A2S по UDP, REST, каталог серверов Bohemia);
 3. держит in-memory состояние каждого сервера (`unknown` / `online` / `offline`) с антидребезгом по `failedChecks`;
 4. при изменении сводного представления обновляет `channel_description` заданных каналов TeamSpeak (BBCode);
 5. при переходах статуса online/offline пишет в Telegram-канал;
@@ -42,7 +42,7 @@ teamSpeakMonitoring/         сам сервис
   src/
     main.ts                  composition root: собирает объекты, вешает подписки, shutdown
     migrate.ts               вторая точка входа: применяет миграции и выходит (отдельный процесс)
-    properties.ts            convict-конфиги: TeamSpeak, DB, admin-порт, TG, monitor, TS-каналы
+    properties.ts            convict-конфиги: TeamSpeak, DB, admin-порт, TG, monitor, TS-каналы, Bohemia
     notifierConfig.ts        convict-флаги включения нотифаеров
     logger.ts                pino (pino-pretty вне production)
     retry.ts                 повтор с экспоненциальным backoff
@@ -56,14 +56,18 @@ teamSpeakMonitoring/         сам сервис
       MonitoredServer.ts     StoredServer (контракт хранилища), ServerMonitorConfig,
                              ServerQuerySource, ServerQueryRole
                              + шпаргалка по строкам в monitored_servers/server_query_sources
-      ServerQuery.ts         контракт опроса: ServerQueryConfig (a2s | rest), ServerQueryResult
-                             (все поля опциональные), ServerPollResult (alive + info), Querier,
-                             QueryFieldMap; SERVER_QUERY_FIELDS — доменные поля как значение,
-                             нужен для проверки карт, приезжающих из БД
+      ServerQuery.ts         контракт опроса: ServerQueryConfig (a2s | rest | bohemia), ServerQueryResult
+                             (все поля опциональные: players, очередь, сценарий, свежесть),
+                             ServerPollResult (alive + info), Querier, QueryFieldMap;
+                             SERVER_QUERY_FIELDS — доменные поля и их типы как значение, нужен
+                             для проверки карт из БД и чужого JSON; narrowQueryConfig — сужение
+                             конфига до типа querier'а (закрыт долг п. 5)
       pollServerSources.ts   опрос всех источников сервера за тик: параллельный старт, ожидание
                              главного, окно graceMs для остальных, слияние; здесь же SourceQueryRunner
       mergeQueryResults.ts   чистая функция: ответы источников → один результат, по приоритету
                              (списка полей нет: ключи приезжают вместе с данными)
+      SecondarySourceThrottle.ts  второстепенные не чаще MONITOR_SECONDARY_POLL_INTERVAL_MS:
+                             тик один, между опросами в слияние идёт прошлый ответ источника
       resolvePrimarySource.ts  чистая функция: кто из источников определяет online/offline
       buildMonitorConfigs.ts   StoredServer[] → ServerMonitorConfig[]: сортировка источников,
                              выбор главного, отсев серверов без источников; о пропусках
@@ -106,8 +110,15 @@ teamSpeakMonitoring/         сам сервис
 
     queriers/              ← адаптеры опроса
       A2sQuerier.ts          @callowayisweird/source-query (единственный, кто знает эту библиотеку)
-      RestQuerier.ts         fetch + AbortController, разбор ответа по карте полей из конфига
-                             (пути с точкой, поле за полем)
+      RestQuerier.ts         разбор любого JSON по карте полей из конфига (пути с точкой,
+                             поле за полем, тип значения — по SERVER_QUERY_FIELDS)
+      BohemiaLobbyQuerier.ts POST rooms/search каталога Bohemia по hostAddress: очередь, сценарий,
+                             код прямого подключения, свежесть. Единственный, кто знает форму
+                             ответа Bohemia. Протокольные константы — из env (BOHEMIA_*)
+      BiTokenProvider.ts     клиент к соседнему сервису arma-reforger-hz (GET /token): кэш до
+                             expiresAt, один in-flight запрос на все серверы, invalidate по 401/403.
+                             Пустой BOHEMIA_TOKEN_URL — источники bohemia молчат
+      fetchJson.ts           общий fetch с таймаутом для REST и Bohemia
     teamspeak/             ← адаптер TeamSpeak
       TeamSpeakConnection.ts жизненный цикл одного query-соединения (SSH), lazy connect, close
       TeamSpeakClient.ts     единственное место, знающее про ts3-nodejs-library API
@@ -227,6 +238,12 @@ teamSpeakMonitoring/         сам сервис
   его бюджет. Главный промолчал — не ждём никого. Потолок тика = `timeout(главного) + grace`,
   и он важен: `Scheduler` планирует следующий тик после завершения предыдущего, поэтому без потолка
   один медленный источник растягивал бы интервал опроса всему серверу.
+- **Второстепенные реже главного** (`SecondarySourceThrottle`). Второстепенный источник не
+  опрашивается чаще `MONITOR_SECONDARY_POLL_INTERVAL_MS`; в тики между опросами в слияние идёт его
+  прошлый ответ (иначе очередь мигала бы в табло). Тик при этом один и целостный: шедулер про это
+  не знает, grace-окно работает как прежде. Висящий запрос на следующем тике не дублируется, а
+  ошибка забывается сразу, чтобы повтор был возможен. Интервал — нижняя граница, а не расписание:
+  при главном раз в 40 с и пороге 30 с второстепенный опрашивается каждый тик. Ноль выключает.
 - **Адаптивный интервал.** Если `failedChecks > 0` и статус ещё не `offline` — опрос учащается до
   `MONITOR_SUSPICIOUS_POLL_INTERVAL_MS` (борьба с ложными срабатываниями), иначе `MONITOR_POLL_INTERVAL_MS`.
 - **Дедупликация — у потребителя, не в мониторе.** Монитор эмитит `stateUpdated` после каждого опроса,
@@ -284,8 +301,10 @@ teamSpeakMonitoring/         сам сервис
 
 Правила при доработках:
 
-- Новый транспорт опроса → новый класс в `queriers/`, регистрация в `ServerMonitor.queriers`, новый вариант
-  в `ServerQueryConfig`. Больше ничего менять не нужно.
+- Новый транспорт опроса → новый вариант в `ServerQueryConfig`, класс в `queriers/` (первой строкой
+  `narrowQueryConfig(config, "<type>")`), регистрация в реестре в `main.ts` — компилятор потребует её сам.
+  Если у конфига есть обязательные поля, ветка в `parseQueryConfig`. Больше ничего менять не нужно:
+  так и заводился `bohemia`.
 - Новый канал уведомлений → класс, реализующий `Notifier`, плюс одна запись
   в списке `subscriptions` **в `main.ts`**. `NotificationDispatcher` при этом не меняется —
   он про конкретные каналы ничего не знает.
@@ -327,6 +346,12 @@ teamSpeakMonitoring/         сам сервис
 | `MONITOR_SUSPICIOUS_POLL_INTERVAL_MS` | `1000` | интервал после неудачной попытки |
 | `MONITOR_MAX_FAILED_CHECKS` | `5` | сколько неудач до `offline` |
 | `MONITOR_SECONDARY_GRACE_MS` | `1000` | сколько ждать второстепенные источники **после** ответа главного |
+| `MONITOR_SECONDARY_POLL_INTERVAL_MS` | `30000` | не чаще какого интервала опрашивать один второстепенный источник; между опросами берётся его прошлый ответ. `0` — каждый тик |
+| `BOHEMIA_TOKEN_URL` | `""` | `GET /token` соседнего сервиса arma-reforger-hz (в проде `http://arma-reforger-hz:8080/token` через общую docker-сеть). Пусто — источники `bohemia` молчат, остальное работает |
+| `BOHEMIA_TOKEN_TIMEOUT_MS` / `BOHEMIA_TOKEN_REFRESH_LEAD_MS` | `3000` / `60000` | таймаут запроса токена; за сколько до `expiresAt` перезапрашивать |
+| `BOHEMIA_LOBBY_URL` | `…/lobby/rooms/search` | эндпоинт каталога Bohemia |
+| `BOHEMIA_USER_AGENT` / `BOHEMIA_CLIENT_VERSION` | `Arma Reforger/1.8.0.10 (Client; Windows)` / `1.8.0` | протокольные константы игрового клиента, **меняются с патчами игры** |
+| `BOHEMIA_PLATFORM_ID` / `BOHEMIA_GAME_CLIENT_TYPE` | `ReforgerSteam` / `PLATFORM_PC` | поля тела запроса rooms/search |
 | `MONITOR_STATE_SYNC_INTERVAL_MS` | `60000` | период повторной публикации текущего состояния |
 
 Секреты кладутся **только** в `*.local`-файлы (gitignored). Коммитятся `.env`, `.env.dev`, `.env.test`
@@ -361,7 +386,7 @@ CREATE TABLE IF NOT EXISTS server_query_sources
     server_id    bigint unsigned                        not null,  -- → monitored_servers.id, ON DELETE CASCADE
     role         enum ('primary','secondary')           not null,  -- primary решает online/offline
     priority     int        default 0                   not null,  -- меньше — важнее; порядок слияния
-    query_type   varchar(32)                            not null,  -- 'a2s' | 'rest'
+    query_type   varchar(32)                            not null,  -- 'a2s' | 'rest' | 'bohemia'
     query_config longtext collate utf8mb4_bin           not null
         check (json_valid(`query_config`)),                        -- ServerQueryConfig как JSON
     enabled      tinyint(1) default 1                   not null,  -- отключает источник, не сервер
@@ -389,10 +414,21 @@ CREATE TABLE IF NOT EXISTS server_query_sources
 в `ServerQuery.ts`, единственное место, где доменные поля перечислены как значение: тип в рантайме
 не существует, сверять карту иначе не с чем.
 
+У `bohemia`-источника собственное поле одно — `hostAddress`, игровой адрес сервера (тот же, что
+`game_address`), по нему сервер ищется в каталоге Bohemia. Карты нет: протокол фиксирован.
+Всё протокольное (URL, User-Agent, версии, токен) одинаково для всех серверов и лежит в env.
+
+```json
+{"type":"bohemia","hostAddress":"37.48.253.41:2001","timeout":5000}
+```
+
 `role` и `priority` — **разные оси**, схлопывать в одну колонку нельзя: `role` про надёжность
 источника как индикатора жизни, `priority` про то, чьи данные выигрывают при слиянии. Рабочая
-комбинация — `primary` у A2S (надёжно показывает, что сервер жив), приоритет данных выше у REST
-(приносит больше полей, но может лежать сам по себе).
+раскладка для Arma Reforger (решение zalex 2026-09-03): `a2s` — `primary`, `priority 0`; `bohemia` —
+`secondary`, `priority 1`. Игроки всегда от A2S: он отвечает прямо с игрового сервера на каждом
+опросе, а каталог Bohemia отстаёт на heartbeat. Bohemia приносит только то, чего A2S не знает:
+очередь, сценарий, код прямого подключения. Делать `bohemia` главным не стоит: доступность каталога
+и токена никак не связана с жизнью игрового сервера.
 
 Отключить можно любой источник, включая `primary`: главным станет самый приоритетный из оставшихся
 включённых (предупреждение в лог). Сервер, у которого не осталось ни одного включённого источника,
@@ -663,7 +699,11 @@ npm run test:repo  # только src/persistence/*.test.ts
    в уведомлениях: контракт (`NotificationEvent`, `Notifier`, `NotificationSubscription`)
    вынесен из `NotificationDispatcher.ts` в `notifications/events.ts`, и нотифаеры больше
    не импортируют файл, названный по диспетчеру.
-5. 📌 **Зафиксирован тестом в 6a, не закрыт.** `queriers/*` делают непроверенный
+5. ✅ **Закрыто, итерация 10.** Каждый querier первой строкой сужает конфиг через
+   `narrowQueryConfig(config, "<type>")` и бросает понятную ошибку на чужом типе; каст исчез.
+   Форма конфига по-прежнему проверяется в `parseQueryConfig` только там, где поломка иначе
+   не проявилась бы (карта у `rest`, `hostAddress` у `bohemia`). Исходная запись:
+   `queriers/*` делали непроверенный
    `config as A2sQueryConfig` / `as RestQueryConfig`. Дефект начинается раньше — в `parseQueryConfig`:
    там сверяется только `type`, а форма конфига не проверяется, поэтому `{"type":"a2s"}` без `host`
    и `port` спокойно доезжает до querier'а и падает уже в опросе. Теперь это поведение закреплено

@@ -77,3 +77,22 @@ test("изменение, невидимое в описании, ключ не 
         ChannelDescriptionRenderer.renderBody([base]),
     );
 });
+
+test("очередь видна и различима в ключе, нулевая и неизвестная не показываются", () => {
+    const withQueue = snapshotFixture({id: 1, name: "First", status: "online", players: 128, maxPlayers: 128, info: {queueSize: 7}});
+    const emptyQueue = snapshotFixture({id: 1, name: "First", status: "online", players: 128, maxPlayers: 128, info: {queueSize: 0}});
+    const unknownQueue = snapshotFixture({id: 1, name: "First", status: "online", players: 128, maxPlayers: 128});
+
+    assert.match(ChannelDescriptionRenderer.renderBody([withQueue]), /128\/128\[\/color\] \[color=#FFD166\]\+7 в очереди\[\/color\]$/);
+    //«+0 в очереди» у полного сервера не сообщает ничего; неизвестная очередь выглядит так же.
+    assert.equal(ChannelDescriptionRenderer.renderBody([emptyQueue]), ChannelDescriptionRenderer.renderBody([unknownQueue]));
+    assert.doesNotMatch(ChannelDescriptionRenderer.renderBody([emptyQueue]), /очеред/);
+});
+
+test("свежесть данных в описание не попадает", () => {
+    //Возраст меняется каждую секунду — попади он в ключ, табло переписывалось бы на каждом тике.
+    const fresh = snapshotFixture({id: 1, name: "First", status: "online", players: 10, info: {queueSize: 2, dataUpdatedAt: 1_000}});
+    const stale = snapshotFixture({id: 1, name: "First", status: "online", players: 10, info: {queueSize: 2, dataUpdatedAt: 999_000}});
+
+    assert.equal(ChannelDescriptionRenderer.renderBody([fresh]), ChannelDescriptionRenderer.renderBody([stale]));
+});

@@ -1,5 +1,6 @@
 import {
     unknownQueryFields,
+    type BohemiaQueryConfig,
     type RestQueryConfig,
     type ServerQueryConfig,
 } from "../monitoring/ServerQuery.js";
@@ -40,7 +41,22 @@ export function parseQueryConfig(row: QueryConfigRow): ServerQueryConfig {
         assertUsableFieldMap(query as Partial<RestQueryConfig>, row);
     }
 
+    if (query.type === "bohemia") {
+        assertHostAddress(query as Partial<BohemiaQueryConfig>, row);
+    }
+
     return query as ServerQueryConfig;
+}
+
+//У bohemia-источника единственное собственное поле — адрес, по которому ищется комната.
+//Без него запрос уйдёт без фильтра и вернёт чужие серверы, а toQueryResult ни один не примет:
+//источник выглядел бы как «каталог не знает сервер», и искать причину пришлось бы в debug-логе.
+function assertHostAddress(query: Partial<BohemiaQueryConfig>, row: QueryConfigRow): void {
+    if (typeof query.hostAddress !== "string" || query.hostAddress === "") {
+        throw new Error(
+            `Missing hostAddress in bohemia query_config for query source ${row.id} (server ${row.serverId})`,
+        );
+    }
 }
 
 //Карта полей — единственное место в конфиге, которое проверяется по существу, и вот почему.

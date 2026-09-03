@@ -37,6 +37,12 @@ StartLimitBurst=5
 # Единственное, что правится под конкретную машину.
 WorkingDirectory=/opt/teamspeakbot/.docker
 
+# Общая сеть с сервисом токенов Bohemia (arma-reforger-hz). В compose она объявлена external,
+# поэтому должна существовать до up. Ведущий «-» гасит ошибку «already exists» — сеть создаёт тот
+# из двух юнитов, кто стартует первым. Порядок между юнитами не нужен: без соседа приложение
+# работает, только без очереди.
+ExecStartPre=-/usr/bin/docker network create arma-shared
+
 # up без -d: compose остаётся на переднем плане, и systemd следит за реальным процессом стека,
 # а не за отработавшей командой. Только так работают Restart= и честный systemctl status,
 # а логи контейнеров попадают в journald.

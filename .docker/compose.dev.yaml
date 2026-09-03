@@ -13,7 +13,6 @@ services:
   mariadb:
     image: mariadb:11.4
     container_name: tsbot-dev-mariadb
-    restart: unless-stopped
 
     environment:
       # Дев-значения, не секреты: ровно те, что стоят в закоммиченном .env, чтобы приложение
@@ -45,7 +44,6 @@ services:
     image: teamspeaksystems/teamspeak6-server:latest
     container_name: tsbot-dev-teamspeak
     profiles: ["teamspeak"]
-    restart: unless-stopped
 
     depends_on:
       mariadb:

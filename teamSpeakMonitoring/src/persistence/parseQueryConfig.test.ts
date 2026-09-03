@@ -114,3 +114,21 @@ test("поля внутри конфига не проверяются: {type} �
 
     assert.deepEqual(config, {type: "a2s"} as unknown as typeof config);
 });
+
+test("bohemia без hostAddress — ошибка с номером источника", () => {
+    //Без адреса запрос ушёл бы без фильтра, а разбор не принял бы ни одну комнату: источник
+    //выглядел бы как «каталог не знает сервер», и причину пришлось бы искать в debug-логе.
+    assert.throws(
+        () => parseQueryConfig(row({id: 7, queryType: "bohemia", queryConfig: '{"type":"bohemia","timeout":5000}'})),
+        /Missing hostAddress in bohemia query_config for query source 7 \(server 100\)/,
+    );
+});
+
+test("bohemia с адресом проходит как есть", () => {
+    const config = parseQueryConfig(row({
+        queryType: "bohemia",
+        queryConfig: '{"type":"bohemia","hostAddress":"37.48.253.41:2001","timeout":5000}',
+    }));
+
+    assert.deepEqual(config, {type: "bohemia", hostAddress: "37.48.253.41:2001", timeout: 5000});
+});

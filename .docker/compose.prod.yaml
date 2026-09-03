@@ -136,6 +136,21 @@ services:
       # dotenv-flow подхватывает .env.local; сам образ конфигов не содержит.
       - ./env/tsbot.env:/app/.env.local:ro
 
+    networks:
+      - default
+      # Общая сеть с сервисом токенов Bohemia (arma-reforger-hz, другой compose). Через неё
+      # приложение ходит на http://arma-reforger-hz:8080/token (BOHEMIA_TOKEN_URL в tsbot.env).
+      - arma
+
+networks:
+  # Внешняя: создаётся один раз руками (docker network create arma-shared) — юнит делает это
+  # в ExecStartPre. Внешняя, а не своя, потому что принадлежит обоим compose-проектам сразу,
+  # и down любого из них не должен её сносить у другого. Сосед недоступен — приложение работает
+  # без очереди, порядок запуска стеков не важен.
+  arma:
+    name: arma-shared
+    external: true
+
 volumes:
   teamspeak-data:
     name: teamspeak6-data

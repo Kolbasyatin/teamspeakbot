@@ -103,6 +103,28 @@ sudo systemctl restart teamspeak6
 Образ приложения собирается отдельно — workflow `Build Docker Images` в GitHub Actions
 (ручной запуск) и публикуется в GHCR.
 
+### Соседний сервис: токен Bohemia
+
+Очередь на вход серверов Arma Reforger приложение берёт из каталога Bohemia, а токен для него
+добывает отдельный сервис `arma-reforger-hz` (свой репозиторий, свой compose в `/opt/arma-reforger-hz`,
+свой systemd-юнит `arma-reforger`). Проекты намеренно не объединены в один compose: связь —
+на уровне docker-сети.
+
+```bash
+docker network create arma-shared     # один раз на машине; оба юнита делают это же в ExecStartPre
+```
+
+Оба compose подключают её как `external`, поэтому:
+
+- `BOHEMIA_TOKEN_URL=http://arma-reforger-hz:8080/token` в `tsbot.env` — имя контейнера соседа
+  резолвится внутри `arma-shared`;
+- порядок запуска юнитов не важен: сосед недоступен или ещё без токена — приложение работает,
+  просто очередь не собирается, а в лог уходит один `warn` на эпизод недоступности;
+- `docker compose down` любого из проектов сеть не трогает (она внешняя).
+
+Локально (разработка) сосед запускается в docker с проброшенным портом, и в `.env.dev.local`
+кладётся `BOHEMIA_TOKEN_URL=http://localhost:8080/token`.
+
 ### Схема БД
 
 Миграции применяет **отдельный процесс**, а не приложение: в прод-compose это одноразовый сервис
