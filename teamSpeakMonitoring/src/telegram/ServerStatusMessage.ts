@@ -2,6 +2,7 @@ import {InlineKeyboard} from "grammy";
 import {formatDuration, intervalToDuration} from "date-fns";
 import {ru} from "date-fns/locale";
 import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
+import {escapeHtml} from "./escapeHtml.js";
 
 //Сводка «мои серверы» для Telegram. Чистая функция, как и ServerListMessage: данные на входе,
 //текст на выходе, ни сети, ни БД.
@@ -24,10 +25,11 @@ export interface UnmonitoredServer {
     name: string;
 }
 
+//Метки общие с уведомлениями TelegramStatusNotifier — менять вместе.
 const STATUS_MARK = {
     online: "🟢",
     offline: "🔴",
-    unknown: "⚪",
+    unknown: "🟡",
 } as const;
 
 const PLAYERS = "👥";
@@ -149,10 +151,4 @@ function formatSince(statusSince: Date, now: Date): string {
         format: ["hours", "minutes"],
         zero: false,
     }) || "меньше минуты";
-}
-
-//Имя сервера приходит из БД и может содержать что угодно. Незакрытый «<» в нём — это не кривая
-//вёрстка, а отказ Telegram разобрать сообщение целиком, то есть /status перестанет отвечать.
-function escapeHtml(text: string): string {
-    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

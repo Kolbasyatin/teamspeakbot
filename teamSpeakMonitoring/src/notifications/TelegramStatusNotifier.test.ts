@@ -49,7 +49,7 @@ test("на serverOnline отправляется текст из таблицы"
 
     await new TelegramStatusNotifier(sender).notify(serverOnline);
 
-    assert.deepEqual(sender.sent, ["ARMA-RUSSIAN is online"]);
+    assert.deepEqual(sender.sent, ["🟢 <b>ARMA-RUSSIAN</b> is online"]);
 });
 
 test("на serverOffline отправляется текст из таблицы", async () => {
@@ -57,7 +57,7 @@ test("на serverOffline отправляется текст из таблицы
 
     await new TelegramStatusNotifier(sender).notify(serverOffline);
 
-    assert.deepEqual(sender.sent, ["ARMA-RUSSIAN is offline"]);
+    assert.deepEqual(sender.sent, ["🔴 <b>ARMA-RUSSIAN</b> is offline"]);
 });
 
 test("один экземпляр обслуживает оба события", async () => {
@@ -68,7 +68,7 @@ test("один экземпляр обслуживает оба события",
     await notifier.notify(serverOnline);
     await notifier.notify(serverOffline);
 
-    assert.deepEqual(sender.sent, ["ARMA-RUSSIAN is online", "ARMA-RUSSIAN is offline"]);
+    assert.deepEqual(sender.sent, ["🟢 <b>ARMA-RUSSIAN</b> is online", "🔴 <b>ARMA-RUSSIAN</b> is offline"]);
 });
 
 test("имя сервера берётся из конфигурации снапшота", async () => {
@@ -79,7 +79,19 @@ test("имя сервера берётся из конфигурации сна�
         snapshot: snapshot("#5 PLANESET"),
     });
 
-    assert.deepEqual(sender.sent, ["#5 PLANESET is online"]);
+    assert.deepEqual(sender.sent, ["🟢 <b>#5 PLANESET</b> is online"]);
+});
+
+test("имя сервера экранируется: транспорт отправляет HTML", async () => {
+    //Незакрытый «<» в имени — отказ Telegram разобрать сообщение целиком, уведомление не дойдёт.
+    const sender = createSender();
+
+    await new TelegramStatusNotifier(sender).notify({
+        type: "serverOffline",
+        snapshot: snapshot("Tom & Jerry <EU>"),
+    });
+
+    assert.deepEqual(sender.sent, ["🔴 <b>Tom &amp; Jerry &lt;EU&gt;</b> is offline"]);
 });
 
 test("отказ транспорта пробрасывается наружу, чтобы диспетчер его залогировал", async () => {

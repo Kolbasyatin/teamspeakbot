@@ -1,4 +1,5 @@
 import type {Notifier, NotificationEventOf} from "./events.js";
+import {escapeHtml} from "../telegram/escapeHtml.js";
 
 //Одна операция, как и у TelegramStatusNotifier: адресата подставляет composition root.
 export interface MessageSender {
@@ -20,7 +21,7 @@ export class RoundFinishNotifier implements Notifier<"roundFinish"> {
         const players = event.snapshot.currentInfo?.players;
 
         await this.sender.send([
-            `⏳ ${event.snapshot.config.name}`,
+            `⏳ <b>${escapeHtml(event.snapshot.config.name)}</b>`,
             `Похоже, раунд заканчивается: было ${event.playersBefore}` +
             (players === undefined ? "" : `, стало ${players}${maxPlayers === undefined ? "" : `/${maxPlayers}`}`),
             "Самое время начать ебланить.",

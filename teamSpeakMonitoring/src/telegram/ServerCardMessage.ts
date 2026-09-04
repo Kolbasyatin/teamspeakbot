@@ -5,6 +5,7 @@ import {
     isSubscriptionEventKind,
     type SubscriptionEventKind,
 } from "./SubscriptionEvent.js";
+import {escapeHtml} from "./escapeHtml.js";
 
 //Карточка одного сервера: что про него присылать и кнопка «отписаться».
 //
@@ -92,10 +93,4 @@ export function renderServerCard(
         ].join("\n"),
         keyboard,
     };
-}
-
-//Имя и адрес приходят из БД и могут содержать что угодно. Незакрытый «<» — это отказ Telegram
-//разобрать сообщение целиком, то есть карточка не откроется вовсе.
-function escapeHtml(text: string): string {
-    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
