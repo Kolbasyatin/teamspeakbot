@@ -105,6 +105,32 @@ services:
     volumes:
       - ./env/tsbot.env:/app/.env.local:ro
 
+  # Сервис токенов Bohemia: держит в памяти свежий BI access token и отдаёт его по GET /token.
+  # Порт наружу не публикуется — потребитель один и живёт в этом же стеке.
+  #
+  bohemia-token:
+    image: ghcr.io/kolbasyatin/arma-reforger-hz:latest
+    container_name: arma-reforger-hz
+
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+
+    volumes:
+      - ./arma-token-data:/data
+
+  # Интерактивный Steam-логин: логин, пароль, код Steam Guard -> arma-token-data/steam-auth.json.
+  # Профиль tools означает, что сам он не стартует; запускается через steam-login.sh.
+  # Сервис останавливать не нужно, файл подхватится на следующей попытке (до минуты).
+  bohemia-token-cli:
+    image: ghcr.io/kolbasyatin/arma-reforger-hz:latest
+    profiles: [tools]
+    entrypoint: ["dotnet", "cli/ArmaReforger.Cli.dll"]
+    stdin_open: true
+    tty: true
+
+    volumes:
+      - ./arma-token-data:/data
+
   ts-monitoring:
     image: ghcr.io/kolbasyatin/teamspeakbot/tsbot-monitor:latest
     container_name: teamspeak6-monitoring
@@ -135,21 +161,6 @@ services:
     volumes:
       # dotenv-flow подхватывает .env.local; сам образ конфигов не содержит.
       - ./env/tsbot.env:/app/.env.local:ro
-
-    networks:
-      - default
-      # Общая сеть с сервисом токенов Bohemia (arma-reforger-hz, другой compose). Через неё
-      # приложение ходит на http://arma-reforger-hz:8080/token (BOHEMIA_TOKEN_URL в tsbot.env).
-      - arma
-
-networks:
-  # Внешняя: создаётся один раз руками (docker network create arma-shared) — юнит делает это
-  # в ExecStartPre. Внешняя, а не своя, потому что принадлежит обоим compose-проектам сразу,
-  # и down любого из них не должен её сносить у другого. Сосед недоступен — приложение работает
-  # без очереди, порядок запуска стеков не важен.
-  arma:
-    name: arma-shared
-    external: true
 
 volumes:
   teamspeak-data:

@@ -12,3 +12,6 @@ xray
 
 # Настоящие env-файлы окружений: в репозитории только *.example
 .docker/env/*.env
+
+# Состояние Steam-аутентификации сервиса токенов Bohemia (refresh token)
+.docker/arma-token-data/

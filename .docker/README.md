@@ -6,12 +6,13 @@
 | файл | что |
 |---|---|
 | `compose.dev.yaml` | разработка: MariaDB, а под профилями — TeamSpeak и приложение |
-| `compose.prod.yaml` | прод: TeamSpeak + MariaDB + образ приложения из GHCR |
+| `compose.prod.yaml` | прод: TeamSpeak + MariaDB + приложение + сервис токенов Bohemia, образы из GHCR |
 | `mariadb/init/01-databases.sql` | провижининг баз `tsbot` и `tsbot_test` (не миграция схемы) |
 | `Dockerfile` | образ для сервиса `app` из дев-compose (node + git), не для прода |
 | `env/secrets.env.example` | пароли — единственное их место |
 | `env/tsbot.env.example` | конфигурация приложения (паролей в проде не содержит) |
 | `systemd/teamspeak6.service` | юнит, которым прод-стек запускается и контролируется на машине |
+| `steam-login.sh` | интерактивный Steam-логин для сервиса токенов Bohemia |
 
 Прод и дев **изолированы по построению**: разные имена проектов (`teamspeak6` против `tsbot-dev`)
 и разные имена томов, поэтому дев-окружение не может подключиться к прод-данным или затереть их.
@@ -104,27 +105,57 @@ sudo systemctl restart teamspeak6
 при каждом push в `master`, затронувшем `teamSpeakMonitoring/` (после typecheck и unit-тестов),
 или вручную через «Run workflow». Публикуется в GHCR тегами `latest` и `sha-<коммит>`.
 
-### Соседний сервис: токен Bohemia
+### Сервис токенов Bohemia
 
 Очередь на вход серверов Arma Reforger приложение берёт из каталога Bohemia, а токен для него
-добывает отдельный сервис `arma-reforger-hz` (свой репозиторий, свой compose в `/opt/arma-reforger-hz`,
-свой systemd-юнит `arma-reforger`). Проекты намеренно не объединены в один compose: связь —
-на уровне docker-сети.
+добывает сервис из репозитория `arma-reforger-hz`. Код у него свой, деплой — общий: сервис
+`bohemia-token` описан прямо в `compose.prod.yaml`, образ тянется из
+`ghcr.io/kolbasyatin/arma-reforger-hz`. Отдельного compose и отдельного юнита `arma-reforger`
+больше нет, как и внешней сети `arma-shared`: внутри одного проекта хватает сети по умолчанию.
+
+Имя контейнера оставлено прежним, `arma-reforger-hz`, поэтому
+`BOHEMIA_TOKEN_URL=http://arma-reforger-hz:8080/token` в `tsbot.env` менять не нужно. Имя сервиса
+`bohemia-token` резолвится в той же сети, так что оба адреса рабочие. Порт наружу не публикуется.
+
+Приложение переживает недоступность сервиса токенов: очередь не собирается, в лог уходит один
+`warn` на эпизод, всё остальное работает. Обратное неверно — теперь это один стек, и падение
+сервиса токенов роняет `up` целиком, то есть перезапускает и TeamSpeak.
+
+Состояние Steam-аутентификации (refresh token) лежит в `arma-token-data/steam-auth.json`
+рядом с compose. Каталог гитигнорится. Логин делается один раз, скриптом:
 
 ```bash
-docker network create arma-shared     # один раз на машине; оба юнита делают это же в ExecStartPre
+cd /opt/teamspeakbot/.docker
+./steam-login.sh        # логин, пароль, код Steam Guard
 ```
 
-Оба compose подключают её как `external`, поэтому:
+Повторный логин нужен, если Steam отозвал refresh token — в логе `Steam logon failed`.
+Стек при этом останавливать не надо: файл подхватится в течение минуты.
 
-- `BOHEMIA_TOKEN_URL=http://arma-reforger-hz:8080/token` в `tsbot.env` — имя контейнера соседа
-  резолвится внутри `arma-shared`;
-- порядок запуска юнитов не важен: сосед недоступен или ещё без токена — приложение работает,
-  просто очередь не собирается, а в лог уходит один `warn` на эпизод недоступности;
-- `docker compose down` любого из проектов сеть не трогает (она внешняя).
+```bash
+docker logs -f arma-reforger-hz    # проверить, что токен получен
+```
 
-Локально (разработка) сосед запускается в docker с проброшенным портом, и в `.env.dev.local`
+Локально (разработка) сервис запускается в docker с проброшенным портом, и в `.env.dev.local`
 кладётся `BOHEMIA_TOKEN_URL=http://localhost:8080/token`.
+
+#### Переезд со старой схемы
+
+Пока на машине жив юнит `arma-reforger`, два стека будут драться за имя контейнера
+`arma-reforger-hz`. Порядок такой:
+
+```bash
+sudo systemctl disable --now arma-reforger
+sudo rm /etc/systemd/system/arma-reforger.service
+sudo systemctl daemon-reload
+
+# состояние Steam переносится как есть — повторный логин не нужен
+sudo mv /opt/arma-reforger-hz/data /opt/teamspeakbot/.docker/arma-token-data
+
+sudo systemctl restart teamspeak6
+```
+
+Сеть `arma-shared` после этого никому не нужна: `docker network rm arma-shared`.
 
 ### Схема БД
 
