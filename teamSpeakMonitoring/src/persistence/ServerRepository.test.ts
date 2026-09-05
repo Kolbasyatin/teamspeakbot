@@ -278,6 +278,37 @@ test("пустой список id не роняет запрос", async () => 
     assert.deepEqual(await repository.findByIds([]), []);
 });
 
+test("один сервер читается со источниками и без подписки", async () => {
+    //Разовая проверка из бота: смысл в том, чтобы посмотреть на сервер, за которым никто не следит.
+    const id = await insertMonitoredServerFixture(pool, {
+        name: "Nobody subscribed",
+        gameAddress: "127.0.0.1:2001",
+        sources: [
+            {query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}, role: "primary", priority: 0},
+            {query: {type: "bohemia", hostAddress: "127.0.0.1:2001", timeout: 1000}, role: "secondary", priority: 1},
+            {query: {type: "rest", url: "https://example.com", timeout: 1000, fields: {players: "p"}}, enabled: false},
+        ],
+    });
+
+    const server = await repository.findStoredById(id);
+
+    assert.equal(server?.name, "Nobody subscribed");
+    assert.deepEqual(server?.sources.map(source => source.query.type).toSorted(), ["a2s", "bohemia"]);
+});
+
+test("скрытый или несуществующий сервер разово не проверяется", async () => {
+    //enabled — про видимость в каталоге; чего в каталоге нет, того и проверять нечего.
+    const hidden = await insertMonitoredServerFixture(pool, {
+        name: "Hidden",
+        gameAddress: "127.0.0.1:2002",
+        enabled: false,
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17778, timeout: 1000}}],
+    });
+
+    assert.equal(await repository.findStoredById(hidden), undefined);
+    assert.equal(await repository.findStoredById(hidden + 1000), undefined);
+});
+
 test.after(async () => {
     await pool.end();
 });

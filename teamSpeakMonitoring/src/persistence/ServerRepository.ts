@@ -143,6 +143,51 @@ export class ServerRepository {
         return rows.map(toCatalogServer);
     }
 
+    //Один сервер со своими источниками — для разовой проверки по кнопке в боте.
+    //Условия на подписку здесь НЕТ намеренно: смысл проверки в том, чтобы посмотреть на сервер,
+    //за которым никто не следит. enabled остаётся: скрытый из каталога сервер проверять нечего.
+    //undefined — сервера нет или он выключен. Пустые sources — опрашивать нечем; что с этим делать,
+    //решает домен (buildMonitorConfigs), как и для findMonitored.
+    public async findStoredById(id: number): Promise<StoredServer | undefined> {
+        const [server] = await this.pool.query<ServerRow[]>(
+            `
+                SELECT id,
+                       name,
+                       game_address AS gameAddress
+                FROM monitored_servers
+                WHERE id = ?
+                  AND enabled = ?
+            `,
+            [id, true],
+        );
+
+        if (!server) {
+            return undefined;
+        }
+
+        const sources = await this.pool.query<SourceRow[]>(
+            `
+                SELECT id,
+                       server_id    AS serverId,
+                       role,
+                       priority,
+                       query_type   AS queryType,
+                       query_config AS queryConfig
+                FROM server_query_sources
+                WHERE server_id = ?
+                  AND enabled = ?
+            `,
+            [id, true],
+        );
+
+        return {
+            id: Number(server.id),
+            name: server.name,
+            gameAddress: server.gameAddress,
+            sources: sources.map(toQuerySource),
+        };
+    }
+
     //Без ORDER BY по приоритету намеренно: порядок источников — это порядок слияния данных,
     //то есть доменное правило, и сортирует их buildMonitorConfigs. Будь порядок на совести
     //запроса, забытый ORDER BY в новой реализации молча менял бы то, чьи данные побеждают.
@@ -175,18 +220,24 @@ export class ServerRepository {
             const serverId = Number(row.serverId);
             const sources = byServer.get(serverId) ?? [];
 
-            sources.push({
-                id: Number(row.id),
-                role: row.role,
-                priority: Number(row.priority),
-                query: parseQueryConfig(row),
-            });
+            sources.push(toQuerySource(row));
 
             byServer.set(serverId, sources);
         }
 
         return byServer;
     }
+}
+
+//Строка источника → доменный источник. Одно место на оба чтения (список опроса и один сервер),
+//чтобы разбор query_config и перевод bigint не разъехались.
+function toQuerySource(row: SourceRow): ServerQuerySource {
+    return {
+        id: Number(row.id),
+        role: row.role,
+        priority: Number(row.priority),
+        query: parseQueryConfig(row),
+    };
 }
 
 //bigint у драйвера — деталь протокола, домену он не нужен. Тот же перевод, что и в остальных чтениях.

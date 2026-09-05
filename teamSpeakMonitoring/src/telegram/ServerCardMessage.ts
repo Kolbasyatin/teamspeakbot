@@ -5,26 +5,33 @@ import {
     isSubscriptionEventKind,
     type SubscriptionEventKind,
 } from "./SubscriptionEvent.js";
+import {decodeOrigin, encodeOrigin, type ListOrigin} from "./ServerListMessage.js";
 import {escapeHtml} from "./escapeHtml.js";
 
-//Карточка одного сервера: что про него присылать и кнопка «отписаться».
+//Карточка одного сервера: всё, что можно с ним сделать, — подписаться или отписаться, проверить,
+//что на нём сейчас, настроить, что присылать.
 //
-//Отдельный экран, а не галочки прямо в списке: в списке нажатие означает «слежу / не слежу»,
-//и это быстрый путь, который ломать нельзя. Тонкая настройка живёт там, где её ищут, —
-//внутри своего сервера.
+//Отдельный экран, а не кнопки прямо в списке: в списке на сервер одна кнопка, иначе при паре
+//десятков серверов он превращается в стену. Всё многообразие действий живёт там, где его ищут, —
+//внутри своего сервера. Карточка открывается из обоих списков и знает, откуда, чтобы вернуть назад.
 
-export type CardActionType = "toggleEvent" | "unsubscribe" | "back";
+export type CardActionType = "toggleEvent" | "subscribe" | "unsubscribe" | "check" | "back";
 
 export interface CardAction {
     action: CardActionType;
     serverId: number;
     //Заполнен только у toggleEvent. Для остальных действий пустая строка.
     kind: SubscriptionEventKind | undefined;
+    //Откуда открыли карточку. Носится в каждой кнопке, потому что после любого действия карточка
+    //перерисовывается и «◀ К списку» должен по-прежнему знать, куда вести.
+    origin: ListOrigin;
 }
 
 const CARD_ACTION_CODE: Record<CardActionType, string> = {
     toggleEvent: "e",
+    subscribe: "s",
     unsubscribe: "u",
+    check: "c",
     back: "b",
 };
 
@@ -34,23 +41,32 @@ export const CARD_ACTION_PATTERN = new RegExp(
     `^k:[${Object.values(CARD_ACTION_CODE).join("")}]:`,
 );
 
+//k:<действие>:<сервер>:<тип>:<список>:<страница>:<поиск> — семь частей. Хвост из трёх частей —
+//тот же формат происхождения, что у кнопок списка, поэтому кодируется его функцией.
 export function encodeCardAction(action: CardAction): string {
-    return ["k", CARD_ACTION_CODE[action.action], action.serverId, action.kind ?? ""].join(":");
+    return [
+        "k",
+        CARD_ACTION_CODE[action.action],
+        action.serverId,
+        action.kind ?? "",
+        ...encodeOrigin(action.origin),
+    ].join(":");
 }
 
 //undefined вместо исключения: кнопка может прийти из сообщения, отправленного до смены формата.
 export function decodeCardAction(data: string): CardAction | undefined {
     const parts = data.split(":");
 
-    if (parts.length !== 4 || parts[0] !== "k") {
+    if (parts.length !== 7 || parts[0] !== "k") {
         return undefined;
     }
 
-    const [, code, serverId, kind] = parts;
+    const [, code, serverId, kind, view, page, search] = parts;
     const action = (Object.keys(CARD_ACTION_CODE) as CardActionType[])
         .find(name => CARD_ACTION_CODE[name] === code);
+    const origin = decodeOrigin(view, page, search);
 
-    if (!action || serverId === undefined || !/^\d+$/.test(serverId)) {
+    if (!action || !origin || serverId === undefined || !/^\d+$/.test(serverId)) {
         return undefined;
     }
 
@@ -58,39 +74,59 @@ export function decodeCardAction(data: string): CardAction | undefined {
         action,
         serverId: Number(serverId),
         kind: kind !== undefined && isSubscriptionEventKind(kind) ? kind : undefined,
+        origin,
     };
 }
 
 export function renderServerCard(
     server: CatalogServer,
+    subscribed: boolean,
     enabled: ReadonlySet<SubscriptionEventKind>,
+    origin: ListOrigin,
 ): {text: string; keyboard: InlineKeyboard} {
     const keyboard = new InlineKeyboard();
+    const button = (action: CardActionType, kind?: SubscriptionEventKind): string =>
+        encodeCardAction({action, serverId: server.id, kind, origin});
 
-    //Строки берутся из той же таблицы, что и сами типы: второго списка, который может разъехаться
-    //с первым, не появляется. Добавили тип — кнопка возникает сама.
-    for (const kind of Object.keys(SUBSCRIPTION_EVENT_TITLES) as SubscriptionEventKind[]) {
-        keyboard
-            .text(
-                `${enabled.has(kind) ? "✅" : "▫️"} ${SUBSCRIPTION_EVENT_TITLES[kind]}`,
-                encodeCardAction({action: "toggleEvent", serverId: server.id, kind}),
-            )
-            .row();
+    if (subscribed) {
+        //Строки берутся из той же таблицы, что и сами типы: второго списка, который может разъехаться
+        //с первым, не появляется. Добавили тип — кнопка возникает сама.
+        for (const kind of Object.keys(SUBSCRIPTION_EVENT_TITLES) as SubscriptionEventKind[]) {
+            keyboard
+                .text(`${enabled.has(kind) ? "✅" : "▫️"} ${SUBSCRIPTION_EVENT_TITLES[kind]}`, button("toggleEvent", kind))
+                .row();
+        }
+    } else {
+        keyboard.text("➕ Подписаться", button("subscribe")).row();
     }
 
-    keyboard
-        .text("🗑 Отписаться", encodeCardAction({action: "unsubscribe", serverId: server.id, kind: undefined}))
-        .text("◀ К списку", encodeCardAction({action: "back", serverId: server.id, kind: undefined}));
+    //Проверка не зависит от подписки — ради этого карточка и открывается из каталога.
+    keyboard.text("🔍 Проверить", button("check")).row();
+
+    if (subscribed) {
+        keyboard.text("🗑 Отписаться", button("unsubscribe"));
+    }
+
+    keyboard.text("◀ К списку", button("back"));
 
     return {
         text: [
             `<b>${escapeHtml(server.name)}</b>`,
             `<code>${escapeHtml(server.gameAddress)}</code>`,
             "",
-            enabled.size === 0
-                ? "Ничего не присылаю — все уведомления выключены."
-                : "Что присылать:",
+            describeSubscription(subscribed, enabled),
         ].join("\n"),
         keyboard,
     };
+}
+
+function describeSubscription(subscribed: boolean, enabled: ReadonlySet<SubscriptionEventKind>): string {
+    if (!subscribed) {
+        return "Ты не подписан на этот сервер.";
+    }
+
+    //Иначе человек видит подписку, которая молчит, и считает это поломкой.
+    return enabled.size === 0
+        ? "Ничего не присылаю — все уведомления выключены."
+        : "Что присылать:";
 }

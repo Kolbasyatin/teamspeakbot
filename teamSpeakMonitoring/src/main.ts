@@ -45,6 +45,7 @@ import {Bot} from "grammy";
 import {retry} from "./retry.js";
 import {buildMonitorConfigs, type BuildNotice} from "./monitoring/buildMonitorConfigs.js";
 import type {ServerMonitorConfig} from "./monitoring/MonitoredServer.js";
+import type {ServerPollResult} from "./monitoring/ServerQuery.js";
 
 //Предупреждения сборки конфигов — единственное место, где они превращаются в текст.
 //switch, а не if: новый вариант BuildNotice обязан получить свою ветку, иначе присваивание
@@ -129,7 +130,10 @@ async function main(): Promise<any> {
     const telegramBot = telegramApi
         ? new TelegramBot(telegramApi, [
             new TeamSpeakCommands(teamSpeakClient),
-            new SubscriptionCommands(serverRepository, subscriptionRepository, monitor, () => {
+            new SubscriptionCommands(serverRepository, subscriptionRepository, {
+                getSnapshot: () => monitor.getSnapshot(),
+                checkServer: checkServerOnce,
+            }, () => {
                 void syncMonitorServersFromRepository().catch(error => {
                     log.error({error}, "Не удалось пересобрать список опроса после изменения подписок");
                 });
@@ -321,6 +325,26 @@ async function main(): Promise<any> {
         notices.forEach(logBuildNotice);
 
         return configs;
+    }
+
+    //Разовая проверка сервера по кнопке в боте. Тот же путь, что у списка опроса — прочитать
+    //строку, собрать конфиг доменным правилом, — но для одного сервера, без условия на подписку
+    //и без probe: ответ уходит тому, кто нажал, и больше никуда. Предупреждения сборки
+    //(«нет источников») логируются так же, как при полной пересборке.
+    async function checkServerOnce(serverId: number): Promise<ServerPollResult | undefined> {
+        const stored = await serverRepository.findStoredById(serverId);
+
+        if (!stored) {
+            return undefined;
+        }
+
+        const {configs, notices} = buildMonitorConfigs([stored]);
+
+        notices.forEach(logBuildNotice);
+
+        const [config] = configs;
+
+        return config ? monitor.checkOnce(config) : undefined;
     }
 
     //Список табло перечитывается тем же вызовом, что и список опроса: подписка меняет оба сразу,

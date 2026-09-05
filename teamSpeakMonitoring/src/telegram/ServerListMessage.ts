@@ -8,39 +8,42 @@ import type {CatalogServer} from "../catalog/CatalogServer.js";
 //выглядят — дело транспорта.
 
 //Сколько серверов на странице. Восемь — чтобы клавиатура помещалась на экран телефона целиком
-//вместе со стрелками.
+//вместе со стрелками. На сервер ровно одна кнопка: всё остальное живёт в карточке, иначе
+//при паре десятков серверов список превращается в стену кнопок.
 export const PAGE_SIZE = 8;
 
 //Два списка, которые рисуются одинаково и отличаются только источником строк и подписью:
 //catalog — «на что можно подписаться», mine — «на что я уже подписан».
 export type ListView = "catalog" | "mine";
 
-//toggle — переключить подписку на serverId, page — перелистнуть, open — открыть карточку сервера.
-export type ListActionType = "toggle" | "page" | "open";
+//page — перелистнуть, open — открыть карточку сервера. Подписка, проверка и настройки живут
+//в карточке: нажатие на имя в любом списке ведёт туда. Раньше в каталоге нажатие переключало
+//подписку напрямую, но тогда для второго действия (проверить) в строке не оставалось места —
+//Telegram делит строку между кнопками поровну, и имя обрезалось наполовину.
+export type ListActionType = "page" | "open";
 
-//Что пользователь нажал. Клавиатура и её разбор — две стороны одного протокола, поэтому лежат рядом:
-//поменяешь формат в одном месте — второе перестанет компилироваться вместе с ним.
-export interface ListAction {
+//Откуда открыли карточку: какой список, страница, поиск. Карточка носит это в своих кнопках,
+//чтобы «◀ К списку» вернул ровно туда, откуда пришли, а не на первую страницу.
+export interface ListOrigin {
     view: ListView;
-    action: ListActionType;
-    serverId: number;
     page: number;
     search: string;
 }
 
+//Что пользователь нажал. Клавиатура и её разбор — две стороны одного протокола, поэтому лежат рядом:
+//поменяешь формат в одном месте — второе перестанет компилироваться вместе с ним.
+export interface ListAction extends ListOrigin {
+    action: ListActionType;
+    serverId: number;
+}
+
 //Коды в callback_data. Record, а не пара тернарников при разборе: компилятор требует запись
-//для КАЖДОГО варианта, поэтому добавление третьего действия валит сборку, пока ему не дадут код.
-//Тернарник «если не toggle, значит page» этого не умеет — забытое действие молча стало бы page.
+//для КАЖДОГО варианта, поэтому добавление действия валит сборку, пока ему не дадут код.
+//Тернарник «если не page, значит open» этого не умеет — забытое действие молча стало бы open.
 //Одна таблица на обе стороны: encode читает её слева направо, decode справа налево,
 //и разъехаться им негде.
 const VIEW_CODE: Record<ListView, string> = {catalog: "c", mine: "m"};
-const ACTION_CODE: Record<ListActionType, string> = {toggle: "t", page: "p", open: "o"};
-
-//Что делает нажатие на сервер — зависит от списка, и это тоже таблица, а не тернарник:
-//добавится третий список, компилятор потребует решить, как он себя ведёт.
-//В каталоге нажатие означает «слежу / не слежу» — быстрый путь, ломать его нельзя.
-//В своих подписках сервер уже выбран, поэтому нажатие открывает его настройки.
-const SERVER_BUTTON_ACTION: Record<ListView, ListActionType> = {catalog: "toggle", mine: "open"};
+const ACTION_CODE: Record<ListActionType, string> = {page: "p", open: "o"};
 
 //По чему бот узнаёт свою кнопку среди чужих. Собирается из тех же таблиц, а не пишется руками:
 //иначе новый код действия пришлось бы вписывать в два места, и забытое второе означало бы
@@ -71,14 +74,12 @@ export function pageCount(total: number): number {
     return Math.max(1, Math.ceil(total / PAGE_SIZE));
 }
 
+//<список>:<действие>:<сервер>:<страница>:<поиск>. Код списка стоит первым, а не в хвосте вместе
+//с остальным происхождением: по нему и по действию LIST_ACTION_PATTERN узнаёт кнопку списка.
 export function encodeAction(action: ListAction): string {
-    return [
-        VIEW_CODE[action.view],
-        ACTION_CODE[action.action],
-        action.serverId,
-        action.page,
-        action.search,
-    ].join(":");
+    const [view, page, search] = encodeOrigin(action);
+
+    return [view, ACTION_CODE[action.action], action.serverId, page, search].join(":");
 }
 
 //undefined, а не исключение: callback_data может прийти из старого сообщения после обновления
@@ -92,24 +93,38 @@ export function decodeAction(data: string): ListAction | undefined {
     }
 
     const [view, action, serverId, page, search] = parts;
-    const decodedView = decodeByCode(VIEW_CODE, view);
     const decodedAction = decodeByCode(ACTION_CODE, action);
+    const origin = decodeOrigin(view, page, search);
 
-    if (!decodedView || !decodedAction) {
-        return undefined;
-    }
-
-    if (!isNonNegativeInteger(serverId) || !isNonNegativeInteger(page)) {
+    if (!decodedAction || !origin || !isNonNegativeInteger(serverId)) {
         return undefined;
     }
 
     return {
-        view: decodedView,
+        ...origin,
         action: decodedAction,
         serverId: Number(serverId),
-        page: Number(page),
-        search: search ?? "",
     };
+}
+
+//Происхождение в виде частей callback_data: код списка, страница, поиск. Общее для кнопок списка
+//и карточки — карточка дописывает эти три части в хвост своих, чтобы уметь вернуться.
+export function encodeOrigin(origin: ListOrigin): [string, string, string] {
+    return [VIEW_CODE[origin.view], String(origin.page), origin.search];
+}
+
+export function decodeOrigin(
+    view: string | undefined,
+    page: string | undefined,
+    search: string | undefined,
+): ListOrigin | undefined {
+    const decodedView = decodeByCode(VIEW_CODE, view);
+
+    if (!decodedView || !isNonNegativeInteger(page)) {
+        return undefined;
+    }
+
+    return {view: decodedView, page: Number(page), search: search ?? ""};
 }
 
 //Обратный поиск по той же таблице: код → значение. Отдельной таблицы для разбора нет намеренно —
@@ -147,12 +162,11 @@ function renderText(page: ServerListPage): string {
     }
 
     lines.push("");
-    //Подсказка обязана совпадать с тем, что реально делает нажатие: в каталоге это «слежу /
-    //не слежу», в своих подписках — карточка сервера. Иначе человек не узнает про настройки,
-    //пока случайно не нажмёт.
+    //Подсказка обязана совпадать с тем, что реально делает нажатие. В обоих списках это карточка,
+    //разница только в том, что в ней человек скорее всего ищет.
     lines.push(page.view === "catalog"
-        ? "Нажми на сервер, чтобы начать или перестать следить.\nЧто именно присылать — настраивается в /my."
-        : "Нажми на сервер — настроить уведомления или отписаться.");
+        ? "Нажми на сервер — подписаться или посмотреть, что на нём сейчас."
+        : "Нажми на сервер — настроить уведомления, проверить или отписаться.");
 
     return lines.join("\n");
 }
@@ -167,12 +181,14 @@ function renderKeyboard(page: ServerListPage): InlineKeyboard {
     const keyboard = new InlineKeyboard();
 
     for (const server of page.servers) {
-        const mark = page.subscribed.has(server.id) ? "✅" : "➕";
+        //Галочка — подписан. Пустой квадрат, а не плюс: нажатие открывает карточку, а не подписывает,
+        //и плюс обещал бы не то.
+        const mark = page.subscribed.has(server.id) ? "✅" : "▫️";
 
         keyboard
             .text(`${mark} ${server.name}`, encodeAction({
                 view: page.view,
-                action: SERVER_BUTTON_ACTION[page.view],
+                action: "open",
                 serverId: server.id,
                 page: page.page,
                 search: page.search,

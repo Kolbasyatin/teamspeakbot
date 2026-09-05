@@ -199,3 +199,32 @@ test("syncServers добавляет и удаляет серверы из оп�
     assert.equal(monitor.getSnapshot().length, 1, "удалённый сервер выпал из снапшота");
     monitor.stop();
 });
+
+test("checkOnce опрашивает сервер без расписания, probe и событий", async () => {
+    //Кнопка «проверить» в боте: сервер никому не подписан, probe у него нет, а ответ нужен
+    //тому, кто нажал. Монитор при этом не должен ни запомнить сервер, ни разбудить нотифаеры.
+    const a2s = createQuerier({players: 12, maxPlayers: 64});
+    const monitor = createMonitor({a2s, rest: createQuerier(undefined), bohemia: createQuerier(undefined)});
+    let updates = 0;
+    monitor.on("stateUpdated", () => {
+        updates += 1;
+    });
+
+    const result = await monitor.checkOnce(a2sServer(9, "Unsubscribed"));
+
+    assert.deepEqual(result, {alive: true, info: {players: 12, maxPlayers: 64}});
+    assert.equal(a2s.calls.length, 1);
+    assert.deepEqual(a2s.calls[0], {type: "a2s", host: "127.0.0.1", port: 17779, timeout: 1000}, "опрошен именно переданный сервер");
+    assert.deepEqual(monitor.getSnapshot(), [], "probe не появился");
+    assert.equal(updates, 0, "событий не было");
+});
+
+test("checkOnce честно отдаёт молчание главного источника", async () => {
+    const monitor = createMonitor({
+        a2s: createQuerier(undefined),
+        rest: createQuerier(undefined),
+        bohemia: createQuerier(undefined),
+    });
+
+    assert.deepEqual(await monitor.checkOnce(a2sServer(1, "Silent")), {alive: false, info: {}});
+});

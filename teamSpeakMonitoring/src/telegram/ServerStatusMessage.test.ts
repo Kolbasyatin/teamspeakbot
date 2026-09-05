@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {renderServerStatus} from "./ServerStatusMessage.js";
+import {renderServerCheck, renderServerStatus} from "./ServerStatusMessage.js";
 import {snapshotFixture} from "../test/serverFixtures.js";
 
 //Момент времени задаётся явно, поэтому текст детерминирован целиком: snapshotFixture ставит
@@ -147,4 +147,32 @@ test("очередь без свежести показывается без х�
     ).text;
 
     assert.match(text, /⏳ очередь 3\n/);
+});
+
+//Разовая проверка: сервер из каталога, без probe и без подписки.
+const CHECKED = {id: 7, name: "Первый", gameAddress: "127.0.0.1:2001"};
+
+test("разовая проверка показывает игроков и очередь тем же языком, что /status", () => {
+    const text = renderServerCheck(CHECKED, {
+        alive: true,
+        info: {players: 27, maxPlayers: 64, queueSize: 3, dataUpdatedAt: NOW.getTime() - 20 * 1000},
+    }, NOW);
+
+    assert.match(text, /🟢 <b>Первый<\/b>\n<code>127\.0\.0\.1:2001<\/code>\n👥 27\/64\n⏳ очередь 3 · только что/);
+    assert.match(text, /<i>проверено \d\d:\d\d:\d\d<\/i>/);
+});
+
+test("разовая проверка не называет молчание офлайном", () => {
+    //Антидребезга у разового запроса нет: одна потерянная датаграмма — не упавший сервер.
+    const text = renderServerCheck(CHECKED, {alive: false, info: {}}, NOW);
+
+    assert.match(text, /🔴 <b>Первый<\/b>\n<code>127\.0\.0\.1:2001<\/code>\nне ответил на запрос/);
+    assert.doesNotMatch(text, /офлайн|👥/);
+});
+
+test("ответивший сервер без чисел так и говорит", () => {
+    const text = renderServerCheck(CHECKED, {alive: true, info: {}}, NOW);
+
+    assert.match(text, /👥 нет данных/);
+    assert.doesNotMatch(text, /⏳/);
 });

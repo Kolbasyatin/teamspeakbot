@@ -2,6 +2,8 @@ import {InlineKeyboard} from "grammy";
 import {formatDuration, intervalToDuration} from "date-fns";
 import {ru} from "date-fns/locale";
 import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
+import type {ServerPollResult, ServerQueryResult} from "../monitoring/ServerQuery.js";
+import type {CatalogServer} from "../catalog/CatalogServer.js";
 import {escapeHtml} from "./escapeHtml.js";
 
 //Сводка «мои серверы» для Telegram. Чистая функция, как и ServerListMessage: данные на входе,
@@ -59,6 +61,27 @@ export function renderServerStatus(
     };
 }
 
+//Ответ на разовую проверку сервера из каталога (кнопка 🔍). Это не строка /status: probe у сервера
+//может не быть, поэтому нет ни статуса с антидребезгом, ни «онлайн уже 2 часа». Факт ровно один —
+//ответил ли главный источник прямо сейчас и что удалось узнать. Отсюда «не ответил», а не «офлайн»:
+//одна потерянная датаграмма A2S сервер не роняет, и врать про это нельзя.
+//Строки про игроков и очередь те же, что в /status, — из тех же функций.
+export function renderServerCheck(server: CatalogServer, result: ServerPollResult, now: Date): string {
+    const title = `<b>${escapeHtml(server.name)}</b>`;
+    const address = `<code>${escapeHtml(server.gameAddress)}</code>`;
+    const checked = `<i>проверено ${MOSCOW_TIME.format(now)}</i>`;
+
+    if (!result.alive) {
+        return [`🔴 ${title}\n${address}\nне ответил на запрос`, checked].join("\n\n");
+    }
+
+    const facts = [`🟢 ${title}`, address, renderPlayers(result.info), renderQueue(result.info, now)]
+        .filter(line => line !== "")
+        .join("\n");
+
+    return [facts, checked].join("\n\n");
+}
+
 function renderText(
     snapshots: readonly ServerProbeSnapshot[],
     unmonitored: readonly UnmonitoredServer[],
@@ -92,19 +115,23 @@ function renderEntry(snapshot: ServerProbeSnapshot, now: Date): string {
         return `${title}\n${CLOCK} офлайн ${formatSince(snapshot.statusSince, now)}`;
     }
 
-    const players = snapshot.currentInfo?.players;
-    const maxPlayers = snapshot.currentInfo?.maxPlayers;
-
-    //Данных может не быть и у живого сервера: статус unknown до первого удачного опроса,
-    //или ответил только тот источник, который игроков не отдаёт. Правило то же, что у табло
-    //в TeamSpeak: нет чисел — так и говорим, а не показываем ноль.
-    if (players === undefined || maxPlayers === undefined) {
-        return `${title}\n${PLAYERS} нет данных   ${since}`;
-    }
-
-    return [`${title}\n${PLAYERS} ${players}/${maxPlayers}   ${since}`, renderQueue(snapshot, now)]
+    return [`${title}\n${renderPlayers(snapshot.currentInfo)}   ${since}`, renderQueue(snapshot.currentInfo, now)]
         .filter(line => line !== "")
         .join("\n");
+}
+
+//Данных может не быть и у живого сервера: статус unknown до первого удачного опроса,
+//или ответил только тот источник, который игроков не отдаёт. Правило то же, что у табло
+//в TeamSpeak: нет чисел — так и говорим, а не показываем ноль.
+function renderPlayers(info: ServerQueryResult | undefined): string {
+    const players = info?.players;
+    const maxPlayers = info?.maxPlayers;
+
+    if (players === undefined || maxPlayers === undefined) {
+        return `${PLAYERS} нет данных`;
+    }
+
+    return `${PLAYERS} ${players}/${maxPlayers}`;
 }
 
 //Строка про очередь. Появляется, только если источник очереди вообще ответил: нет поля —
@@ -114,8 +141,7 @@ function renderEntry(snapshot: ServerProbeSnapshot, now: Date): string {
 //Свежесть стоит именно здесь, а не у игроков: игроки приезжают по A2S прямо с сервера
 //на каждом опросе, а очередь — из каталога Bohemia с задержкой heartbeat'а и опрашивается
 //реже. Возраст считается по dataUpdatedAt источника, который очередь и принёс.
-function renderQueue(snapshot: ServerProbeSnapshot, now: Date): string {
-    const info = snapshot.currentInfo;
+function renderQueue(info: ServerQueryResult | undefined, now: Date): string {
     const size = info?.queueSize;
 
     if (size === undefined) {

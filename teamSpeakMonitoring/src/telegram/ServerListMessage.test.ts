@@ -2,11 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     decodeAction,
+    decodeOrigin,
     encodeAction,
+    encodeOrigin,
     PAGE_SIZE,
     renderServerList,
     sanitizeSearch,
     type ListAction,
+    type ListOrigin,
     type ServerListPage,
 } from "./ServerListMessage.js";
 import type {CatalogServer} from "../catalog/CatalogServer.js";
@@ -33,7 +36,7 @@ function buttons(keyboard: {inline_keyboard: {text: string; callback_data?: stri
 }
 
 test("действие переживает кодирование и разбор", () => {
-    const action: ListAction = {view: "mine", action: "toggle", serverId: 42, page: 3, search: "arma"};
+    const action: ListAction = {view: "mine", action: "open", serverId: 42, page: 3, search: "arma"};
 
     assert.deepEqual(decodeAction(encodeAction(action)), action);
 });
@@ -41,9 +44,12 @@ test("действие переживает кодирование и разбо
 test("испорченная callback_data не разбирается, а не роняет обработчик", () => {
     //Кнопка из сообщения, отправленного до смены формата, — обычное дело после выката.
     assert.equal(decodeAction("мусор"), undefined);
-    assert.equal(decodeAction("c:t:1:0"), undefined);
-    assert.equal(decodeAction("x:t:1:0:"), undefined);
-    assert.equal(decodeAction("c:t:абв:0:"), undefined);
+    assert.equal(decodeAction("c:o:1:0"), undefined);
+    assert.equal(decodeAction("x:o:1:0:"), undefined);
+    assert.equal(decodeAction("c:o:абв:0:"), undefined);
+    //toggle был действием списка до переезда подписки в карточку — старые кнопки должны устареть,
+    //а не молча превратиться в другое действие.
+    assert.equal(decodeAction("c:t:1:0:"), undefined);
 });
 
 test("из поиска вычищаются подстановочные знаки LIKE и разделитель callback_data", () => {
@@ -55,17 +61,39 @@ test("поиск обрезается: в callback_data всего 64 байта
     assert.equal(sanitizeSearch("a".repeat(100)).length, 24);
 });
 
-test("подписанный сервер помечен галочкой, остальные — плюсом", () => {
+test("подписанный сервер помечен галочкой, остальные — пустым квадратом", () => {
     const {keyboard} = renderServerList(page({subscribed: new Set([2])}));
 
-    assert.deepEqual(buttons(keyboard).map(([text]) => text), ["➕ Первый", "✅ Второй"]);
+    assert.deepEqual(buttons(keyboard).map(([text]) => text), ["▫️ Первый", "✅ Второй"]);
+});
+
+test("на сервер ровно одна кнопка, и она открывает карточку в любом списке", () => {
+    //Подписка и проверка живут в карточке: две кнопки в строке делили бы ширину поровну
+    //и обрезали имя, а вторая строка на сервер удваивала бы высоту списка.
+    for (const view of ["catalog", "mine"] as const) {
+        const {keyboard} = renderServerList(page({view}));
+
+        //grammy оставляет пустую строку после последнего .row() — она не рисуется, и считать её не надо.
+        const rows = keyboard.inline_keyboard.filter(row => row.length > 0);
+
+        assert.deepEqual(rows.map(row => row.length), [1, 1], "по одной кнопке на сервер, без стрелок");
+        assert.equal(decodeAction(buttons(keyboard)[0]?.[1] ?? "")?.action, "open");
+    }
 });
 
 test("нажатие на сервер несёт текущую страницу и поиск", () => {
-    //Иначе перерисовка после переключения подписки выкинула бы человека на первую страницу.
+    //Карточка запоминает это как происхождение: «◀ К списку» вернёт на ту же страницу с тем же поиском.
     const {keyboard} = renderServerList(page({page: 2, total: 40, search: "arma"}));
 
-    assert.equal(buttons(keyboard)[0]?.[1], "c:t:1:2:arma");
+    assert.equal(buttons(keyboard)[0]?.[1], "c:o:1:2:arma");
+});
+
+test("происхождение переживает кодирование и разбор", () => {
+    const origin: ListOrigin = {view: "catalog", page: 4, search: "arma"};
+
+    assert.deepEqual(decodeOrigin(...encodeOrigin(origin)), origin);
+    assert.equal(decodeOrigin("x", "0", ""), undefined);
+    assert.equal(decodeOrigin("c", "-1", ""), undefined);
 });
 
 test("стрелки появляются только туда, куда есть куда идти", () => {

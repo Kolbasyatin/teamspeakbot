@@ -2,9 +2,10 @@ import type {Bot, Context, InlineKeyboard} from "grammy";
 import type {BotCommand, Chat} from "grammy/types";
 import type {CatalogServer} from "../catalog/CatalogServer.js";
 import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
+import type {ServerPollResult} from "../monitoring/ServerQuery.js";
 import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat} from "./TelegramChat.js";
-import {renderServerStatus, STATUS_REFRESH} from "./ServerStatusMessage.js";
+import {renderServerCheck, renderServerStatus, STATUS_REFRESH} from "./ServerStatusMessage.js";
 import {
     CARD_ACTION_PATTERN,
     decodeCardAction,
@@ -22,6 +23,7 @@ import {
     sanitizeSearch,
     type ListAction,
     type ListActionType,
+    type ListOrigin,
     type ListView,
     type ServerListPage,
 } from "./ServerListMessage.js";
@@ -57,6 +59,11 @@ export interface SubscriptionStore {
 //ему знать незачем.
 export interface StatusSource {
     getSnapshot(): ServerProbeSnapshot[];
+
+    //Разовый опрос сервера из каталога, подписка не нужна. undefined — проверять нечего:
+    //сервера нет, он скрыт или у него нет включённых источников. Откуда берётся конфиг
+    //и чем опрашивается, знает composition root.
+    checkServer(serverId: number): Promise<ServerPollResult | undefined>;
 }
 
 const START_TEXT = [
@@ -89,34 +96,40 @@ export class SubscriptionCommands implements BotCommands {
     }
 
     //Что делать по каждому действию списка. Record, а не if: добавишь действие — сборка упадёт,
-    //пока ему не напишут обработчик. С «если не toggle, значит просто перерисовать» новое
-    //действие молча вело бы себя как перелистывание.
-    //
-    //Каждый обработчик сам решает, что показать в конце: раньше перерисовка была общей, но open
-    //рисует не список, а карточку, и общий хвост стал бы враньём.
+    //пока ему не напишут обработчик. Действий у списка два: листать и открыть карточку;
+    //всё содержательное (подписка, проверка, настройки) происходит в карточке.
+    //Карточке передаётся само действие: в нём уже лежат список, страница и поиск — то, куда
+    //потом возвращаться.
     private readonly listActions: Record<ListActionType, (ctx: Context, action: ListAction) => Promise<void>> = {
-        toggle: async (ctx, action) => {
-            await this.toggleSubscription(ctx.chatId ?? 0, action.serverId);
-            await this.showList(ctx, action);
-        },
         page: (ctx, action) => this.showList(ctx, action),
-        open: (ctx, action) => this.showCard(ctx, action.serverId),
+        open: (ctx, action) => this.showCard(ctx, action.serverId, action),
     };
 
     //Что делать по каждому действию карточки. Отдельная таблица, потому что и набор действий свой.
+    //После подписки и отписки карточка перерисовывается, а не уводит в список: человек видит,
+    //что изменилось (появились галочки или кнопка «Подписаться»), и сам решает, куда дальше.
     private readonly cardActions: Record<CardActionType, (ctx: Context, action: CardAction) => Promise<void>> = {
         toggleEvent: async (ctx, action) => {
             if (action.kind) {
                 await this.toggleEvent(ctx.chatId ?? 0, action.serverId, action.kind);
             }
-            await this.showCard(ctx, action.serverId);
+            await this.showCard(ctx, action.serverId, action.origin);
+        },
+        subscribe: async (ctx, action) => {
+            await this.subscriptions.subscribe(ctx.chatId ?? 0, action.serverId);
+            //Подписались на сервер, который никто не опрашивал, — он должен появиться в опросе
+            //сразу, а не после ручного reload.
+            this.onSubscriptionsChanged();
+            await this.showCard(ctx, action.serverId, action.origin);
         },
         unsubscribe: async (ctx, action) => {
             await this.subscriptions.unsubscribe(ctx.chatId ?? 0, action.serverId);
+            //Отписался последний — сервер должен исчезнуть из опроса.
             this.onSubscriptionsChanged();
-            await this.showList(ctx, {view: "mine", action: "page", serverId: 0, page: 0, search: ""});
+            await this.showCard(ctx, action.serverId, action.origin);
         },
-        back: (ctx) => this.showList(ctx, {view: "mine", action: "page", serverId: 0, page: 0, search: ""}),
+        check: (ctx, action) => this.checkServer(ctx, action.serverId),
+        back: (ctx, action) => this.showList(ctx, toPageAction(action.origin)),
     };
 
     //`/time` в меню нет намеренно: он синоним `/status`, и показывать одно и то же двумя строками
@@ -221,23 +234,39 @@ export class SubscriptionCommands implements BotCommands {
         });
     }
 
-    private async showCard(ctx: Context, serverId: number): Promise<void> {
+    private async showCard(ctx: Context, serverId: number, origin: ListOrigin): Promise<void> {
         const chatId = ctx.chatId ?? 0;
         const [server] = await this.catalog.findByIds([serverId]);
 
-        //Сервер могли удалить из каталога, пока человек смотрел на список.
+        //Сервер могли удалить из каталога, пока человек смотрел на список. Возвращаем туда, откуда пришли.
         if (!server) {
-            await this.showList(ctx, {view: "mine", action: "page", serverId: 0, page: 0, search: ""});
+            await this.showList(ctx, toPageAction(origin));
             return;
         }
 
+        const subscribed = (await this.subscriptions.findSubscribedServerIds(chatId)).includes(serverId);
         const enabled = new Set(await this.subscriptions.findSubscriptionEvents(chatId, serverId));
-        const {text, keyboard} = renderServerCard(server, enabled);
+        const {text, keyboard} = renderServerCard(server, subscribed, enabled, origin);
 
         await ctx.editMessageText(text, {parse_mode: "HTML", reply_markup: keyboard})
             .catch((error: unknown) => {
                 log.debug({error}, "Не удалось показать карточку сервера");
             });
+    }
+
+    //Разовая проверка — ответ НОВЫМ сообщением, а не правкой карточки: карточка — табло, а это ответ
+    //на вопрос, и ему место в переписке. Пока идёт опрос (до таймаута главного источника плюс
+    //grace-окно), человек ничего не видит: нажатие уже подтверждено в applyCardAction.
+    private async checkServer(ctx: Context, serverId: number): Promise<void> {
+        const [server] = await this.catalog.findByIds([serverId]);
+        const result = server ? await this.status.checkServer(serverId) : undefined;
+
+        if (!server || !result) {
+            await ctx.reply("Этот сервер сейчас нельзя проверить: его нет в каталоге или его нечем опросить.");
+            return;
+        }
+
+        await ctx.reply(renderServerCheck(server, result, new Date()), {parse_mode: "HTML"});
     }
 
     private async toggleEvent(
@@ -277,20 +306,6 @@ export class SubscriptionCommands implements BotCommands {
         const unmonitored = await this.catalog.findByIds([...subscribedIds]);
 
         return renderServerStatus(snapshots, unmonitored, new Date());
-    }
-
-    private async toggleSubscription(chatId: number, serverId: number): Promise<void> {
-        const subscribed = new Set(await this.subscriptions.findSubscribedServerIds(chatId));
-
-        if (subscribed.has(serverId)) {
-            await this.subscriptions.unsubscribe(chatId, serverId);
-        } else {
-            await this.subscriptions.subscribe(chatId, serverId);
-        }
-
-        //Подписались на сервер, который никто не опрашивал, — он должен появиться в опросе сразу,
-        //а не после ручного reload. Отписался последний — наоборот, исчезнуть.
-        this.onSubscriptionsChanged();
     }
 
     private async replyWithList(ctx: Context, view: ListView, page: number, search: string): Promise<void> {
@@ -348,6 +363,12 @@ export class SubscriptionCommands implements BotCommands {
 
         await this.subscriptions.saveChat(toTelegramChat(ctx.chat));
     }
+}
+
+//«Показать вот этот список на вот этой странице» как действие списка. Так карточка возвращается
+//туда, откуда открыта, тем же путём, каким листаются страницы.
+function toPageAction(origin: ListOrigin): ListAction {
+    return {...origin, action: "page", serverId: 0};
 }
 
 //Страница могла исчезнуть, пока человек на неё смотрел: отписался от последнего сервера на ней —

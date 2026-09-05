@@ -1,7 +1,7 @@
 import {ServerProbe, type ServerProbeSnapshot, type ServerStatus} from "./ServerProbe.js";
 import {EventEmitter} from "node:events";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
-import type {Querier, QuerierRegistry, ServerQueryConfig} from "./ServerQuery.js";
+import type {Querier, QuerierRegistry, ServerPollResult, ServerQueryConfig} from "./ServerQuery.js";
 import {pollServerSources} from "./pollServerSources.js";
 import {SecondarySourceThrottle} from "./SecondarySourceThrottle.js";
 import {type ScheduledTask, Scheduler} from "./Scheduler.js";
@@ -71,6 +71,20 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         );
 
         probe.handleResult(result);
+    }
+
+    //Разовый опрос мимо расписания и probe: результат возвращается тому, кто спросил, событий
+    //не эмитится, состояние монитора не меняется. Нужен кнопке «проверить» в боте — там сервер
+    //может быть никому не подписан, то есть probe у него нет и взяться ему неоткуда.
+    //Тот же pollServerSources, что и в тике: все источники, главный решает alive, остальные
+    //добавляют данные в grace-окне. Троттлинг второстепенных не участвует — запрос и так один.
+    public checkOnce(config: ServerMonitorConfig): Promise<ServerPollResult> {
+        return pollServerSources(
+            config,
+            source => this.getQuerier(source.query.type).query(source.query),
+            this.options.secondaryGraceMs,
+            this.logger,
+        );
     }
 
     public forceSync(servers: ServerMonitorConfig[]) {
