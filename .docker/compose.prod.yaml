@@ -157,6 +157,15 @@ services:
       # им же ходят руками по SSH. Разъехаться значениям теперь негде.
       TS_PASSWORD: "${TS_QUERY_ADMIN_PASSWORD}"
       DB_PASSWORD: "${TS_DB_PASSWORD}"
+      # Токен соседнего сервиса наблюдения за игроками. Как и пароли, живёт только в secrets.env:
+      # одно значение в двух файлах рано или поздно разъезжается. Пусто — тема выключена.
+      PLAYERS_API_TOKEN: "${PLAYERS_API_TOKEN:-}"
+
+    # Сервис наблюдения за игроками живёт в другом compose и публикует порт на хосте, поэтому
+    # достать его по имени контейнера нельзя. host.docker.internal даёт адрес хоста изнутри
+    # контейнера; сам адрес подставляет docker (host-gateway).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     volumes:
       # dotenv-flow подхватывает .env.local; сам образ конфигов не содержит.

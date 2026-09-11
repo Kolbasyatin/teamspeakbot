@@ -39,8 +39,10 @@ export interface PlayerFeature {
 //Отдельный файл, а не кусок main.ts, потому что тема связная и у неё есть имя — ровно то,
 //что §8 п. 25 AGENTS.md предлагает делать с разросшимся main.
 //
-//Пустой baseUrl означает «наблюдателя нет»: возвращаем undefined, и бот просто не получает
-//ни команд про игроков, ни фоновых задач. Мониторинг серверов работает как прежде.
+//Пустой baseUrl ИЛИ пустой токен означают «наблюдателя нет»: возвращаем undefined, и бот просто
+//не получает ни команд про игроков, ни фоновых задач. Мониторинг серверов работает как прежде.
+//Токен проверяется наравне с адресом намеренно: с адресом, но без токена сосед отвечает 401
+//на каждый запрос, и лента засыпала бы лог предупреждениями каждые пятнадцать секунд.
 export function buildPlayerFeature(
     properties: PlayerFeatureProperties,
     store: PlayerStore,
@@ -49,7 +51,7 @@ export function buildPlayerFeature(
     logger: Logger,
     now: () => Date = () => new Date(),
 ): PlayerFeature | undefined {
-    if (properties.baseUrl === "") {
+    if (properties.baseUrl === "" || properties.apiToken === "") {
         return undefined;
     }
 

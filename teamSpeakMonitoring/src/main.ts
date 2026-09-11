@@ -139,7 +139,7 @@ async function main(): Promise<any> {
             await telegramBot?.sender.send(chatId, text);
         },
     };
-    //Пустой PLAYERS_API_URL выключает тему целиком: ни команд, ни фоновых задач.
+    //Пустой PLAYERS_API_URL или PLAYERS_API_TOKEN выключает тему целиком: ни команд, ни фоновых задач.
     const playerFeature = buildPlayerFeature(
         playerObserverProperties,
         playerSubscriptionRepository,
@@ -149,7 +149,7 @@ async function main(): Promise<any> {
     );
 
     if (!playerFeature) {
-        log.info("PLAYERS_API_URL пуст — команды и уведомления про игроков отключены");
+        log.info("PLAYERS_API_URL или PLAYERS_API_TOKEN пуст — команды и уведомления про игроков отключены");
     }
     //Наборы команд перечислены здесь, потому что зависимости у них разные и живут они здесь же.
     //Сами команды не зависят от TELEGRAM_NOTIFIER: тот флаг управляет только уведомлениями.

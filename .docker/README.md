@@ -178,3 +178,36 @@ DB_NAME=tsbot_test npm run migrate   # к любой другой, если ну
 номера, применённые версии лежат в таблице `schema_migrations`. **Применённую миграцию править
 нельзя** — мигратор сверяет контрольную сумму и откажется работать; вместо правки добавляется
 новый файл.
+
+## Сервис наблюдения за игроками (соседний compose)
+
+Команды `/watch`, `/players`, `/where`, `/history` и уведомления о входе и выходе игроков берут данные
+у сервиса `armaplayers` ([arma-players-backend](https://github.com/kolbasyatin/arma-players-backend)).
+Он живёт в **своём** compose со своим Postgres и публикует HTTP на хосте, поэтому по имени контейнера
+недоступен — связь идёт через адрес хоста.
+
+Что нужно на машине:
+
+1. У соседа в его `deploy/.env` — `API_TOKEN` (любая длинная случайная строка, `openssl rand -hex 32`)
+   и `API_BIND_ADDR` = адрес шлюза docker-моста, иначе порт виден только самому хосту:
+
+   ```bash
+   docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'   # например 172.17.0.1
+   ```
+
+2. Здесь — тот же токен в `env/secrets.env` (`PLAYERS_API_TOKEN`) и адрес в `env/tsbot.env`
+   (`PLAYERS_API_URL=http://host.docker.internal:8081`). `host.docker.internal` контейнеру даёт
+   `extra_hosts` в `compose.prod.yaml`, адрес подставляет docker.
+
+3. Проверить связь изнутри контейнера приложения:
+
+   ```bash
+   docker exec teamspeak6-monitoring node -e "fetch('http://host.docker.internal:8081/health').then(r=>console.log(r.status))"
+   ```
+
+Пустой `PLAYERS_API_URL` или `PLAYERS_API_TOKEN` выключает тему целиком: команд про игроков не будет,
+мониторинг серверов работает как раньше. Недоступность соседа тоже не роняет приложение — команды
+отвечают «сервис наблюдения недоступен», лента событий повторит попытку на следующем тике.
+
+Схему для подписок на игроков (таблицы `player_subscriptions`, `pending_player_subscriptions`,
+`player_event_cursor`) создаёт миграция 008 — её применяет тот же одноразовый контейнер `migrate`.
