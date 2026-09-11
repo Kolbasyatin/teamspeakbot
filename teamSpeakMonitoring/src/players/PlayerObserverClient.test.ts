@@ -161,6 +161,22 @@ test("сетевой отказ и код ошибки превращаются 
     );
 });
 
+test("причина сетевого отказа попадает в сообщение", async () => {
+    //Иначе в логе «Запрос не удался» одинаково выглядит и закрытый порт, и неразрешимое имя:
+    //Node прячет настоящую ошибку в cause, а наружу отдаёт бесполезное «fetch failed».
+    const failure = new TypeError("fetch failed");
+
+    (failure as {cause?: unknown}).cause = Object.assign(new Error("connect ECONNREFUSED 172.17.0.1:8081"), {
+        code: "ECONNREFUSED",
+    });
+    stubFetch(failure);
+
+    await assert.rejects(
+        () => new PlayerObserverClient(PROPERTIES).eventsHead(),
+        (error: unknown) => error instanceof PlayerObserverUnavailable && error.message.includes("ECONNREFUSED"),
+    );
+});
+
 test("ненастроенный наблюдатель не ходит в сеть", async () => {
     const {calls} = stubFetch({body: {}});
 

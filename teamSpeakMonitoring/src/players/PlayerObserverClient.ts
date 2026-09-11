@@ -123,8 +123,13 @@ export class PlayerObserverClient implements PlayerObserver {
                 headers: {Authorization: `Bearer ${this.properties.apiToken}`},
             });
         } catch (error) {
-            //Сеть, таймаут, DNS: наружу это одно и то же — сервис недоступен.
-            throw new PlayerObserverUnavailable(`Запрос к наблюдателю не удался: ${path}`, error);
+            //Сеть, таймаут, DNS: для вызывающего это одно и то же — сервис недоступен. А вот в логе
+            //причина нужна: без неё «не удался» одинаково выглядит и при закрытом порте,
+            //и при неразрешимом имени, и при таймауте.
+            throw new PlayerObserverUnavailable(
+                `Запрос к наблюдателю не удался: ${path}: ${describeFailure(error)}`,
+                error,
+            );
         }
 
         if (notFoundAs.includes(response.status)) {
@@ -137,6 +142,26 @@ export class PlayerObserverClient implements PlayerObserver {
 
         return response.body;
     }
+}
+
+//Причина отказа fetch. Node (undici) бросает бесполезное «fetch failed», а настоящую ошибку
+//кладёт в cause: ECONNREFUSED (порт закрыт), EAI_AGAIN/ENOTFOUND (имя не разрешилось),
+//UND_ERR_CONNECT_TIMEOUT и AbortError (наш таймаут). Именно это и нужно в логе.
+function describeFailure(error: unknown): string {
+    const cause = error instanceof Error ? error.cause : undefined;
+    const code = typeof cause === "object" && cause !== null && "code" in cause
+        ? String((cause as {code: unknown}).code)
+        : undefined;
+
+    if (code !== undefined) {
+        return code;
+    }
+
+    if (cause instanceof Error) {
+        return cause.message;
+    }
+
+    return error instanceof Error ? error.message : String(error);
 }
 
 //Ниже — разбор чужого JSON. Функции свободные и чистые: их проверяют тестом без сети.

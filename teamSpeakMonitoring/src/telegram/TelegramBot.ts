@@ -47,6 +47,24 @@ export class TelegramBot {
         this.sender = new TelegramSender(bot);
         this.menu = commands.flatMap(set => set.describe());
 
+        //Превью ссылок выключается один раз на весь исходящий трафик, а не в каждом вызове reply.
+        //Названия серверов почти всегда содержат приглашение в discord, и Telegram рисует под
+        //каждым сообщением карточку чужого сообщества: список серверов превращается в ленту
+        //рекламных блоков, а уведомление о входе игрока занимает пол-экрана.
+        //
+        //Трансформер, а не параметр у каждого вызова: мест отправки уже полтора десятка
+        //(нотифаеры, ответы команд, правки сообщений), и забытый параметр в новом месте
+        //никак бы себя не проявил до появления ссылки в тексте.
+        //
+        //payload идёт ПОСЛЕ умолчания: вызов, которому превью нужно, сможет его включить.
+        bot.api.config.use((prev, method, payload, signal) => {
+            if (method !== "sendMessage" && method !== "editMessageText") {
+                return prev(method, payload, signal);
+            }
+
+            return prev(method, {link_preview_options: {is_disabled: true}, ...payload}, signal);
+        });
+
         for (const set of commands) {
             set.register(bot);
         }

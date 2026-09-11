@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type {Bot} from "grammy";
+import type {Bot, Transformer} from "grammy";
 import {TelegramBot, type BotCommands} from "./TelegramBot.js";
 
 //Настоящий Bot здесь не нужен: проверяется только то, что владелец раздаёт его всем наборам
@@ -11,6 +11,8 @@ function createBotStub(): Bot & {caught: boolean} {
         catch: (): void => {
             stub.caught = true;
         },
+        //Конструктор ставит трансформер (выключение превью ссылок), поэтому заглушке нужен api.config.
+        api: {config: {use: (): void => undefined}},
     };
 
     return stub as unknown as Bot & {caught: boolean};
@@ -62,4 +64,52 @@ test("обработчик ошибок вешается всегда", () => {
     new TelegramBot(stub, []);
 
     assert.equal(stub.caught, true);
+});
+
+test("превью ссылок выключено для всего исходящего", async () => {
+    //Названия серверов содержат приглашения в discord: без этого каждое сообщение тащит
+    //за собой карточку чужого сообщества.
+    const calls: {method: string; payload: Record<string, unknown>}[] = [];
+    const transformers: Transformer[] = [];
+    const bot = {
+        api: {
+            config: {
+                use: (transformer: Transformer): void => {
+                    transformers.push(transformer);
+                },
+            },
+        },
+        catch: (): void => undefined,
+    } as unknown as Bot;
+
+    new TelegramBot(bot, []);
+
+    assert.equal(transformers.length, 1, "трансформер должен ставиться в конструкторе");
+
+    const prev = async (method: string, payload: Record<string, unknown>): Promise<never> => {
+        calls.push({method, payload});
+        return undefined as never;
+    };
+    const transformer = transformers[0];
+
+    assert.ok(transformer);
+
+    //sendMessage и editMessageText получают умолчание, остальные методы не трогаются.
+    await transformer(prev as never, "sendMessage" as never, {chat_id: 1, text: "привет"} as never, undefined);
+    await transformer(prev as never, "editMessageText" as never, {chat_id: 1, text: "правка"} as never, undefined);
+    await transformer(prev as never, "answerCallbackQuery" as never, {callback_query_id: "x"} as never, undefined);
+
+    assert.deepEqual(calls[0]?.payload["link_preview_options"], {is_disabled: true});
+    assert.deepEqual(calls[1]?.payload["link_preview_options"], {is_disabled: true});
+    assert.equal(calls[2]?.payload["link_preview_options"], undefined);
+
+    //Вызов вправе включить превью себе обратно: умолчание стоит ДО payload.
+    await transformer(
+        prev as never,
+        "sendMessage" as never,
+        {chat_id: 1, text: "со ссылкой", link_preview_options: {is_disabled: false}} as never,
+        undefined,
+    );
+
+    assert.deepEqual(calls[3]?.payload["link_preview_options"], {is_disabled: false});
 });
