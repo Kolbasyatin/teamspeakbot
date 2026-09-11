@@ -27,6 +27,31 @@ export function decodePlayerPick(data: string): number | undefined {
     return match?.[1] === undefined ? undefined : Number(match[1]);
 }
 
+//Кнопка «никого из них — жду этот ник». Формат: pw:<ник>. С кнопками выбора (p:<число>),
+//списка серверов (c:/m:) и карточки (k:) не пересекается.
+export const PLAYER_WAIT_PATTERN = /^pw:/;
+
+//Telegram ограничивает callback_data 64 БАЙТАМИ, а ник — произвольный UTF-8: кириллица по два
+//байта, эмодзи по четыре. Ник, который не влезает, кнопкой не обслуживается — вместо неё
+//показывается подсказка про команду /wait. Молча обрезать ник нельзя: ждали бы не того человека.
+const CALLBACK_DATA_LIMIT = 64;
+
+export function encodePlayerWait(nickname: string): string | undefined {
+    const data = `pw:${nickname}`;
+
+    return Buffer.byteLength(data, "utf8") <= CALLBACK_DATA_LIMIT ? data : undefined;
+}
+
+export function decodePlayerWait(data: string): string | undefined {
+    if (!PLAYER_WAIT_PATTERN.test(data)) {
+        return undefined;
+    }
+
+    const nickname = data.slice("pw:".length);
+
+    return nickname === "" ? undefined : nickname;
+}
+
 //Человекочитаемая длительность: «8 мин», «1 ч 12 мин». Секунды показываются только когда
 //других единиц нет, иначе «1 ч 12 мин 4 сек» — шум.
 export function humanDuration(seconds: number): string {
@@ -147,7 +172,17 @@ export function renderPlayerCard(player: ObservedPlayer, subscribed: boolean, no
 
 //Кандидаты поиска. Ник не уникален, поэтому выбирать человек будет по различающим признакам:
 //где сейчас или где был, платформа, когда видели.
-export function renderSearchResults(players: readonly ObservedPlayer[], fuzzy: boolean, now: Date): {
+//
+//query — то, что человек искал. Нужен для выхода из списка: среди найденных может не быть НИКОГО
+//из тех, кто нужен, потому что искомый игрок ещё не заходил на наблюдаемые серверы. Без этой кнопки
+//человек упирается в тупик: похожие есть, значит ожидание ему не предложили, а выбрать некого.
+//Пустой query кнопку убирает — так вызывается разбор тёзок при отписке, где ждать нечего.
+export function renderSearchResults(
+    players: readonly ObservedPlayer[],
+    fuzzy: boolean,
+    now: Date,
+    query = "",
+): {
     text: string;
     keyboard: InlineKeyboard;
 } {
@@ -163,6 +198,18 @@ export function renderSearchResults(players: readonly ObservedPlayer[], fuzzy: b
     });
 
     lines.push("", "Выберите, за кем следить.");
+
+    if (query !== "") {
+        const waitData = encodePlayerWait(query);
+
+        if (waitData === undefined) {
+            //Ник не влезает в callback_data — остаётся команда.
+            lines.push(`Никого из них? Тогда /wait ${query} — запомню ник и напишу, когда появится.`);
+        } else {
+            lines.push("Никого из них? Нажмите кнопку ниже — запомню ник и напишу, когда он появится.");
+            keyboard.text(`🔔 Ждать «${query}»`, waitData).row();
+        }
+    }
 
     return {text: lines.join("\n"), keyboard};
 }

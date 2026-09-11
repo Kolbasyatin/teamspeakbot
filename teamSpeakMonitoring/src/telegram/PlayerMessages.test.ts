@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import type {ObservedPlayer, PlayerEvent, PlayerSession} from "../players/PlayerObserver.js";
 import {
     decodePlayerPick,
+    decodePlayerWait,
     encodePlayerPick,
+    encodePlayerWait,
     humanDuration,
     renderEvent,
     renderPlayerCard,
@@ -166,4 +168,45 @@ test("вход после разрыва наблюдения помечаетс
     const text = renderEvent(event({afterDataGap: true}));
 
     assert.ok(text?.includes("приблизительное"), text);
+});
+
+test("из списка похожих есть выход: кнопка ждать искомый ник", () => {
+    //Без неё человек в тупике: похожие есть, значит ожидание ему не предложили,
+    //а среди найденных нужного нет — он ещё не заходил на наблюдаемые серверы.
+    const {text, keyboard} = renderSearchResults([player(), player({playerId: 8})], true, NOW, "Добрый Фей");
+    const buttons = JSON.stringify(keyboard.inline_keyboard);
+
+    assert.ok(buttons.includes("Ждать"), buttons);
+    assert.ok(buttons.includes("pw:Добрый Фей"), buttons);
+    assert.ok(text.includes("Никого из них"), text);
+});
+
+test("без искомого ника кнопки ожидания нет", () => {
+    //Так список показывается при отписке: там выбирают среди своих подписок, ждать нечего.
+    const {text, keyboard} = renderSearchResults([player()], false, NOW);
+
+    assert.ok(!JSON.stringify(keyboard.inline_keyboard).includes("Ждать"));
+    assert.ok(!text.includes("Никого из них"));
+});
+
+test("слишком длинный ник не уезжает в кнопку, а предлагается командой", () => {
+    //callback_data ограничена 64 байтами, кириллица по два байта на символ. Молча обрезать ник
+    //нельзя: ждали бы не того человека.
+    const long = "Очень длинный ник который заведомо не помещается в кнопку";
+
+    assert.equal(encodePlayerWait(long), undefined);
+
+    const {text, keyboard} = renderSearchResults([player()], false, NOW, long);
+
+    assert.ok(!JSON.stringify(keyboard.inline_keyboard).includes("Ждать"));
+    assert.ok(text.includes(`/wait ${long}`), text);
+});
+
+test("ник кнопки ожидания кодируется и разбирается обратно", () => {
+    const data = encodePlayerWait("Добрый Фей");
+
+    assert.ok(data);
+    assert.equal(decodePlayerWait(data), "Добрый Фей");
+    assert.equal(decodePlayerWait("p:42"), undefined, "чужой формат кнопки не должен разбираться");
+    assert.equal(decodePlayerWait("pw:"), undefined, "пустой ник — не ожидание");
 });

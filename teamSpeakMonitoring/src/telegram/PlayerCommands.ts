@@ -157,7 +157,7 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now());
+        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument);
 
         await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
     }
@@ -389,7 +389,7 @@ export class PlayerCommands implements BotCommands {
             return single;
         }
 
-        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now());
+        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument);
 
         await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
 
