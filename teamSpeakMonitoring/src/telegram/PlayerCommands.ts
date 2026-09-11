@@ -10,7 +10,9 @@ import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat, TelegramChatType} from "./TelegramChat.js";
 import {
     PLAYER_PICK_PATTERN,
+    PLAYER_WAIT_PATTERN,
     decodePlayerPick,
+    decodePlayerWait,
     renderPlayerCard,
     renderSearchResults,
     renderSessions,
@@ -58,6 +60,7 @@ const HELP_TEXT = [
     "Слежу за игроками на отслеживаемых серверах Arma Reforger.",
     "",
     "/watch &lt;ник&gt; — найти игрока и подписаться на вход и выход",
+    "/wait &lt;ник&gt; — ждать игрока, которого мы ещё не видели",
     "/unwatch &lt;ник или id&gt; — отписаться",
     "/players — мои подписки и где они сейчас",
     "/where &lt;ник&gt; — где игрок прямо сейчас",
@@ -85,6 +88,13 @@ export class PlayerCommands implements BotCommands {
         bot.command("watch", async ctx => {
             await this.rememberChat(ctx);
             await this.watch(ctx, argumentOf(ctx));
+        });
+
+        //Ждать ник, которого среди известных нет. Отдельной командой, а не только кнопкой:
+        //ник длиннее 64 байт в callback_data не помещается, и кнопки для него не будет.
+        bot.command("wait", async ctx => {
+            await this.rememberChat(ctx);
+            await this.wait(ctx, argumentOf(ctx));
         });
 
         bot.command("unwatch", async ctx => {
@@ -115,11 +125,13 @@ export class PlayerCommands implements BotCommands {
         //Кнопка выбора игрока из результатов поиска. Регистрируется здесь же, до общего
         //обработчика «кнопка устарела» из SubscriptionCommands: порядок регистрации в grammy значим.
         bot.callbackQuery(PLAYER_PICK_PATTERN, ctx => this.pickPlayer(ctx));
+        bot.callbackQuery(PLAYER_WAIT_PATTERN, ctx => this.waitByButton(ctx));
     }
 
     public describe(): BotCommand[] {
         return [
             {command: "watch", description: "следить за игроком"},
+            {command: "wait", description: "ждать игрока, которого мы ещё не видели"},
             {command: "unwatch", description: "перестать следить за игроком"},
             {command: "players", description: "мои игроки и где они сейчас"},
             {command: "where", description: "где игрок сейчас"},
@@ -160,6 +172,32 @@ export class PlayerCommands implements BotCommands {
         const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument);
 
         await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
+    }
+
+    //Человек сам называет ник, которого мы не видели. Поиск здесь не делается: он уже был сделан
+    //(иначе откуда бы взялась кнопка), а «ждать» — осознанное решение, а не догадка.
+    private async wait(ctx: Context, nickname: string): Promise<void> {
+        if (nickname === "") {
+            await ctx.reply("Какой ник ждать? /wait &lt;ник&gt;", {parse_mode: "HTML"});
+            return;
+        }
+
+        await this.offerPending(ctx, ctx.chatId ?? 0, nickname);
+    }
+
+    private async waitByButton(ctx: Context): Promise<void> {
+        const nickname = decodePlayerWait(ctx.callbackQuery?.data ?? "");
+
+        if (nickname === undefined) {
+            await ctx.answerCallbackQuery("Кнопка устарела");
+            return;
+        }
+
+        await this.rememberChat(ctx);
+        //Нажатие подтверждается ДО работы: она ходит в БД, и всё это время на кнопке
+        //висел бы индикатор загрузки.
+        await ctx.answerCallbackQuery();
+        await this.offerPending(ctx, ctx.chatId ?? 0, nickname);
     }
 
     private async unwatch(ctx: Context, argument: string): Promise<void> {
@@ -339,10 +377,9 @@ export class PlayerCommands implements BotCommands {
         await this.subscriptions.addPending(chatId, nickname, expiresAt);
         await ctx.reply(
             [
-                `Игрока «${nickname}» мы не видели.`,
-                "Он мог играть только на серверах вне наблюдения (/observed) — или в нике опечатка.",
+                `Запомнил ник «${nickname}»: напишу, когда такой игрок появится на наблюдаемых серверах.`,
                 "",
-                `Запомнил ник: напишу, когда он появится. Жду ${days} дн., снять — /unwatch ${nickname}.`,
+                `Жду ${days} дн., снять — /unwatch ${nickname}. Мои ожидания видно в /players.`,
             ].join("\n"),
         );
     }
