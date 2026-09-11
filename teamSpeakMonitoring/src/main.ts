@@ -8,6 +8,7 @@ import {log} from "./logger.js";
 import {AdminServer} from "./admin/AdminServer.js";
 import {ServerRepository} from "./persistence/ServerRepository.js";
 import {SubscriptionRepository} from "./persistence/SubscriptionRepository.js";
+import {PlayerSubscriptionRepository} from "./persistence/PlayerSubscriptionRepository.js";
 import {createPool} from "mariadb";
 import {
     dbConfig,
@@ -19,6 +20,7 @@ import {
     roundFinishProperties,
     teamSpeakChannelNames,
     bohemiaProperties,
+    playerObserverProperties,
 } from "./properties.js";
 import {notifierConfig} from "./notifierConfig.js";
 import {NotificationDispatcher} from "./notifications/NotificationDispatcher.js";
@@ -38,6 +40,7 @@ import {ChannelDescriptionRenderer} from "./teamspeak/ChannelDescriptionRenderer
 import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TeamSpeakCommands} from "./telegram/TeamSpeakCommands.js";
 import {SubscriptionCommands} from "./telegram/SubscriptionCommands.js";
+import {buildPlayerFeature, type ChatSender} from "./players/buildPlayerFeature.js";
 import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
@@ -110,6 +113,7 @@ async function main(): Promise<any> {
     const pool = createPool(dbConfig);
     const serverRepository = new ServerRepository(pool);
     const subscriptionRepository = new SubscriptionRepository(pool);
+    const playerSubscriptionRepository = new PlayerSubscriptionRepository(pool);
     const adminWebServer = new AdminServer({
         port: syncConfig.port
     })
@@ -125,11 +129,39 @@ async function main(): Promise<any> {
     //Telegram доступен только при непустом токене: grammy бросает "Empty token!" в конструкторе.
     //Один Bot на процесс — его делят команды бота и отправка уведомлений.
     const telegramApi = tgProperties.token ? new Bot(tgProperties.token) : undefined;
+
+    //Наблюдение за игроками (соседний сервис armaplayers). Кольцо: команды нужны боту при сборке,
+    //а отправка уведомлений живёт у бота. Разрывается тем же приёмом, что и roundFinishPublisher
+    //ниже — объект создаётся раньше, а вызывается заведомо позже, уже во время работы.
+    //Троттлинг общий: sender у бота один, и лимит Bot API тоже один на бота.
+    const chatSender: ChatSender = {
+        send: async (chatId: number, text: string): Promise<void> => {
+            await telegramBot?.sender.send(chatId, text);
+        },
+    };
+    //Пустой PLAYERS_API_URL выключает тему целиком: ни команд, ни фоновых задач.
+    const playerFeature = buildPlayerFeature(
+        playerObserverProperties,
+        playerSubscriptionRepository,
+        subscriptionRepository,
+        chatSender,
+        log,
+    );
+
+    if (!playerFeature) {
+        log.info("PLAYERS_API_URL пуст — команды и уведомления про игроков отключены");
+    }
     //Наборы команд перечислены здесь, потому что зависимости у них разные и живут они здесь же.
     //Сами команды не зависят от TELEGRAM_NOTIFIER: тот флаг управляет только уведомлениями.
-    const telegramBot = telegramApi
+    //let, а не const: на него ссылается chatSender выше — см. комментарий там.
+    let telegramBot: TelegramBot | undefined = telegramApi
         ? new TelegramBot(telegramApi, [
             new TeamSpeakCommands(teamSpeakClient),
+            //ПОРЯДОК ЗНАЧИМ. Набор про игроков идёт ДО подписок на серверы: у тех последним
+            //зарегистрирован перехватчик всех неразобранных нажатий («кнопка устарела»),
+            //а grammy отдаёт апдейт первому подходящему обработчику. Окажись он раньше —
+            //кнопки выбора игрока не доходили бы до своего обработчика вовсе.
+            ...(playerFeature ? [playerFeature.commands] : []),
             new SubscriptionCommands(serverRepository, subscriptionRepository, {
                 getSnapshot: () => monitor.getSnapshot(),
                 checkServer: checkServerOnce,
@@ -281,6 +313,14 @@ async function main(): Promise<any> {
         getNextDelayMs: (): number => stateSyncProperties.intervalMs,
     }]);
 
+    //Свой планировщик, а не общий со stateSync: у тем разные интервалы и разные причины остановки,
+    //а Scheduler уже даёт пер-задачные таймеры и изоляцию исключений.
+    const playerScheduler = new Scheduler<ScheduledTask>(log);
+
+    if (playerFeature) {
+        playerScheduler.sync(playerFeature.tasks);
+    }
+
     monitor.on("stateUpdated", snapshots => {
         void dispatcher.notify({
             type: "serverStateUpdated",
@@ -373,6 +413,7 @@ async function main(): Promise<any> {
         console.log(signal)
         monitor.stop();
         stateSyncScheduler.stop();
+        playerScheduler.stop();
         if (telegramBot) {
             await telegramBot.stop();
         }
@@ -410,6 +451,9 @@ async function main(): Promise<any> {
     //приводится в соответствие с реальностью не дожидаясь первого изменения состояния. Цена —
     //сразу после рестарта в описании на один интервал опроса появятся статусы unknown.
     stateSyncScheduler.start();
+    //Лента событий стартует вместе с остальным: курсор в БД, поэтому пропущенное за время простоя
+    //догонится само.
+    playerScheduler.start();
     telegramBot?.start();
 }
 

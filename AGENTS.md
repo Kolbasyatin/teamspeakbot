@@ -18,7 +18,11 @@
 5. при переходах статуса online/offline пишет в Telegram-канал;
 6. отвечает на команды Telegram-бота (`/who`, `/serverlist`, `/my`, `/status`); из карточки сервера
    разово опрашивает любой сервер каталога («🔍 Проверить») — без подписки и мимо расписания;
-7. поднимает внутренний admin HTTP endpoint для перечитывания списка серверов из БД без рестарта.
+7. поднимает внутренний admin HTTP endpoint для перечитывания списка серверов из БД без рестарта;
+8. **следит за игроками** (`/watch`, `/players`, `/where`, `/history`, `/observed`): подписки на вход
+   и выход конкретного человека. Данные берутся у соседнего сервиса `armaplayers`
+   ([arma-players-backend](https://github.com/kolbasyatin/arma-players-backend)) по REST — своего
+   наблюдения за игроками здесь нет. Пустой `PLAYERS_API_URL` выключает тему целиком.
 
 Окружение вокруг приложения (на prod-сервере, в одном compose): MariaDB, TeamSpeak 6 server, `tsbot-monitor`.
 
@@ -49,6 +53,14 @@ teamSpeakMonitoring/         сам сервис
     logger.ts                pino (pino-pretty вне production)
     retry.ts                 повтор с экспоненциальным backoff
     Saiga.ts                 клиент к OpenAI-совместимому API (Ollama). Пока не подключён — см. §9
+
+    players/               ← наблюдение за игроками: всё общение с соседним сервисом armaplayers
+      PlayerObserver.ts      контракт наблюдателя глазами бота (типы + PlayerObserverUnavailable)
+      PlayerObserverClient.ts адаптер: HTTP + разбор чужого JSON; типы ответов за пределы файла не выходят
+      PlayerEventPoller.ts   ScheduledTask: лента событий по курсору, рассылка подписчикам.
+                             Курсор двигается ТОЛЬКО после доставки — иначе события теряются молча
+      PendingSubscriptionResolver.ts ScheduledTask: ожидания «появится игрок с таким ником»
+      buildPlayerFeature.ts  сборка темы одним вызовом: набор команд + фоновые задачи
 
     monitoring/            ← домен: что значит «следить за сервером»
       ServerMonitor.ts       владеет probes, шедулит опрос, эмитит stateUpdated (после каждого
@@ -317,6 +329,8 @@ teamSpeakMonitoring/         сам сервис
 | `OnlineNicknamesSource` | `telegram/TelegramBot.ts` | `TeamSpeakClient` | боту нужен только список ников |
 | `Notifier<TType>` | `notifications/events.ts` | `TeamSpeakChannelNotifier`, `LogNotifier`, `TelegramStatusNotifier` | канал доставки заменяем; `TType` — объединение обслуживаемых событий, любой ширины |
 | `MessageSender` | `notifications/TelegramStatusNotifier.ts` | `TelegramSender` | нотифаеру нужна одна операция «отправить текст», про grammy и chatId он не знает |
+| `PlayerObserver` | `players/PlayerObserver.ts` | `PlayerObserverClient` | команды и лента не знают, что наблюдатель — это HTTP; отказ соседа приходит как `PlayerObserverUnavailable` |
+| `PlayerSubscriptionStore`, `PlayerEventStore`, `PendingSubscriptionStore` | у своих потребителей (`telegram/PlayerCommands.ts`, `players/*`) | `PlayerSubscriptionRepository` | каждый видит только свои три-четыре вопроса, а не весь репозиторий |
 
 Правила при доработках:
 
@@ -361,6 +375,14 @@ teamSpeakMonitoring/         сам сервис
 | `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `teamspeak` / `""` / `tsbot` | |
 | `DB_CONNECTION_LIMIT` | `2` | размер пула |
 | `SYNC_SERVER_PORT` | `3000` | порт admin HTTP (слушает `0.0.0.0`) |
+| `PLAYERS_API_URL` | `""` | REST соседнего сервиса armaplayers. Пусто — команды и уведомления про игроков выключены, мониторинг работает как раньше |
+| `PLAYERS_API_TOKEN` | `""` | его `API_TOKEN`, уходит заголовком `Authorization: Bearer` |
+| `PLAYERS_API_TIMEOUT_MS` | `5000` | таймаут запроса к соседу |
+| `PLAYERS_EVENT_INTERVAL_MS` | `15000` | как часто спрашивать новые события |
+| `PLAYERS_EVENT_PAGE_SIZE` | `200` | размер страницы ленты: ограничивает всплеск при массовом заходе |
+| `PLAYERS_PENDING_INTERVAL_MS` | `300000` | как часто перепроверять ожидаемые ники |
+| `PLAYERS_PENDING_TTL_MS` | 30 дней | сколько живёт ожидание |
+| `PLAYERS_PENDING_LIMIT` | `5` | сколько ожиданий разрешено одному чату |
 | `MONITOR_POLL_INTERVAL_MS` | `5000` | обычный интервал опроса |
 | `MONITOR_SUSPICIOUS_POLL_INTERVAL_MS` | `1000` | интервал после неудачной попытки |
 | `MONITOR_MAX_FAILED_CHECKS` | `5` | сколько неудач до `offline` |
@@ -467,6 +489,20 @@ CREATE TABLE IF NOT EXISTS server_query_sources
 > никогда. Обнаружено при первом запуске тестов против свежего дев-окружения; лишняя строка убрана.
 > Настоящая починка — один исполняемый источник схемы: мигратор появился в 6b, дубль DDL в тестах
 > уходит в 6c.
+
+### Подписки на игроков (миграция 008)
+
+Три таблицы, все про соседний сервис. `player_subscriptions` — «этот чат следит за этим игроком»;
+`pending_player_subscriptions` — «ждём игрока с таким ником, он ещё не встречался»;
+`player_event_cursor` — единственная строка с id последнего обработанного события ленты.
+
+Ключевое: `player_id` — идентификатор **чужой** базы, внешнего ключа на него нет и быть не может.
+Подписка возможна только на `player_id`, не на ник: один ник носят разные люди (на 2026-09-11 таких
+ников 891), и человек меняет ник, не переставая быть собой.
+
+Курсор хранится в БД, а не в памяти: после перезапуска процесс обязан продолжить с того же места,
+иначе пропущенные за время простоя входы и выходы теряются молча. Двигается он `GREATEST`,
+то есть только вперёд.
 
 ### Подписчики и подписки (миграции 005–006)
 

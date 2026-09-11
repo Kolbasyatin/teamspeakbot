@@ -63,6 +63,9 @@ export async function truncateTestDatabase(pool: Pool): Promise<void> {
 
     await pool.query("DELETE FROM monitored_servers");
     await pool.query("DELETE FROM telegram_chats");
+    //Курсор ленты событий каскадом не уходит: он ни на что не ссылается, это состояние приложения,
+    //а не данные подписчика. Подписки на игроков и ожидания уносит каскад от telegram_chats.
+    await pool.query("DELETE FROM player_event_cursor");
 }
 
 //Чат Telegram в фикстуре. Тип и название со значениями по умолчанию: тестам про подписки

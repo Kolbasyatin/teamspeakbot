@@ -18,6 +18,20 @@ curl -X POST http://localhost:3000/internal/reload-servers        # добави
 curl -X POST http://localhost:3000/internal/force-reload-servers  # изменили существующий
 ```
 
+## Игроки: соседний сервис наблюдения
+
+Команды `/watch`, `/players`, `/where`, `/history`, `/observed` и уведомления о входе и выходе игроков
+работают от сервиса [`arma-players-backend`](https://github.com/kolbasyatin/arma-players-backend):
+он наблюдает за серверами Reforger и отдаёт ленту событий по REST. Здесь — только подписки и тексты.
+
+```dotenv
+PLAYERS_API_URL=http://localhost:8081
+PLAYERS_API_TOKEN=<его API_TOKEN>
+```
+
+Пусто — тема выключена целиком, мониторинг серверов работает как раньше. Контракт ленты и команд —
+`docs/api.md` и `docs/bot.md` в том репозитории.
+
 ## Очередь на вход: соседний сервис токенов Bohemia
 
 Очередь, сценарий и код прямого подключения берутся из каталога Bohemia (источник `bohemia`

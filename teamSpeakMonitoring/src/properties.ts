@@ -135,6 +135,77 @@ export interface BohemiaProperties {
     gameClientType: string;
 }
 
+//Соседний сервис наблюдения за игроками (armaplayers, репозиторий arma-players-backend).
+//Пустой baseUrl выключает всё, что про игроков: ни команд, ни ленты событий, — ровно как пустой
+//BOHEMIA_TOKEN_URL выключает bohemia-источники. Мониторинг серверов от этого не зависит.
+export interface PlayerObserverProperties {
+    baseUrl: string;
+    apiToken: string;
+    timeoutMs: number;
+    //Как часто спрашивать новые события. Задержка уведомления складывается из этого интервала
+    //и интервала наблюдения на стороне соседа (там минуты), поэтому чаще нескольких секунд смысла нет.
+    eventIntervalMs: number;
+    //Размер страницы ленты: ограничивает всплеск при массовом заходе на популярный сервер.
+    eventPageSize: number;
+    //Как часто перепроверять отложенные подписки («появится игрок с таким ником — подпиши меня»).
+    pendingIntervalMs: number;
+    //Сколько живёт такое ожидание и сколько их разрешено одному чату.
+    pendingTtlMs: number;
+    pendingLimit: number;
+}
+
+const playerObserverConfig = convict<PlayerObserverProperties>({
+    baseUrl: {
+        doc: "Base URL of the armaplayers observer REST API; empty disables player features",
+        format: String,
+        default: "",
+        env: "PLAYERS_API_URL",
+    },
+    apiToken: {
+        doc: "Bearer token for the observer API",
+        format: String,
+        default: "",
+        env: "PLAYERS_API_TOKEN",
+        sensitive: true,
+    },
+    timeoutMs: {
+        doc: "Timeout for observer API requests in milliseconds",
+        format: "nat",
+        default: 5_000,
+        env: "PLAYERS_API_TIMEOUT_MS",
+    },
+    eventIntervalMs: {
+        doc: "How often the player event feed is polled",
+        format: "nat",
+        default: 15_000,
+        env: "PLAYERS_EVENT_INTERVAL_MS",
+    },
+    eventPageSize: {
+        doc: "Max events fetched per poll",
+        format: "nat",
+        default: 200,
+        env: "PLAYERS_EVENT_PAGE_SIZE",
+    },
+    pendingIntervalMs: {
+        doc: "How often pending nickname subscriptions are re-checked",
+        format: "nat",
+        default: 300_000,
+        env: "PLAYERS_PENDING_INTERVAL_MS",
+    },
+    pendingTtlMs: {
+        doc: "How long a pending nickname subscription lives",
+        format: "nat",
+        default: 30 * 24 * 60 * 60 * 1_000,
+        env: "PLAYERS_PENDING_TTL_MS",
+    },
+    pendingLimit: {
+        doc: "How many pending nickname subscriptions one chat may have",
+        format: "nat",
+        default: 5,
+        env: "PLAYERS_PENDING_LIMIT",
+    },
+});
+
 const bohemiaConfig = convict<BohemiaProperties>({
     tokenUrl: {
         doc: "GET endpoint of the arma-reforger-hz token service; empty disables bohemia sources",
@@ -342,6 +413,7 @@ tgConfig.validate({allowed: "strict"});
 monitorConfig.validate({allowed: "strict"});
 stateSyncConfig.validate({allowed: "strict"});
 bohemiaConfig.validate({allowed: "strict"});
+playerObserverConfig.validate({allowed: "strict"});
 
 export const properties: TeamSpeakProperties = config.getProperties();
 export const dbConfig = databaseConfig.getProperties()
@@ -352,3 +424,4 @@ export const monitorProperties = monitorConfig.getProperties();
 export const stateSyncProperties = stateSyncConfig.getProperties();
 export const roundFinishProperties = roundFinishConfig.getProperties();
 export const bohemiaProperties = bohemiaConfig.getProperties();
+export const playerObserverProperties = playerObserverConfig.getProperties();
