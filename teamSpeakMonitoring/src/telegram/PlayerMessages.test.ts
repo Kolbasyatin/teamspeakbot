@@ -156,6 +156,7 @@ test("каждый тип события превращается в своё с
     assert.ok(joinedFromQueue?.includes("вошёл"), joinedFromQueue);
     assert.ok(leftQueue?.includes("ушёл из очереди"), leftQueue);
     assert.ok(renamed?.includes("Alicia"), renamed);
+    assert.ok(renamed?.includes("Salat"), `старое имя должно быть в сообщении: ${renamed}`);
 });
 
 test("неизвестный тип события не превращается в сообщение", () => {
@@ -209,4 +210,39 @@ test("ник кнопки ожидания кодируется и разбир�
     assert.equal(decodePlayerWait(data), "Добрый Фей");
     assert.equal(decodePlayerWait("p:42"), undefined, "чужой формат кнопки не должен разбираться");
     assert.equal(decodePlayerWait("pw:"), undefined, "пустой ник — не ожидание");
+});
+
+test("переименование показывает оба имени, даже если сервис прислал новое в nickname", () => {
+    //Было именно так: у события смены ника нет сессии, и сервис подставлял в nickname текущее
+    //(уже новое) имя. Получалось «Новое имя теперь Новое имя». Оба имени есть в payload,
+    //поэтому берём их оттуда.
+    const text = renderEvent(event({
+        type: "PLAYER_NICKNAME_CHANGED",
+        nickname: "Alicia",
+        payload: {old: "Salat", new: "Alicia"},
+    }));
+
+    assert.ok(text?.includes("Salat"), text);
+    assert.ok(text?.includes("Alicia"), text);
+    assert.ok(text);
+    assert.ok(text.indexOf("Salat") < text.indexOf("Alicia"), `старое имя должно идти первым: ${text}`);
+});
+
+test("переименование в то же самое имя не порождает сообщения", () => {
+    assert.equal(
+        renderEvent(event({type: "PLAYER_NICKNAME_CHANGED", payload: {old: "Salat", new: "Salat"}})),
+        undefined,
+    );
+});
+
+test("без old в payload берётся ник события", () => {
+    //Запасной путь на случай старой версии сервиса, которая old не присылала.
+    const text = renderEvent(event({
+        type: "PLAYER_NICKNAME_CHANGED",
+        nickname: "Старый",
+        payload: {new: "Новый"},
+    }));
+
+    assert.ok(text?.includes("Старый"), text);
+    assert.ok(text?.includes("Новый"), text);
 });

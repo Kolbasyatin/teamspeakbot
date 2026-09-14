@@ -127,3 +127,22 @@ test("ожидание снимается по нику", async () => {
 
     assert.deepEqual(await repository.findPendingByChat(CHAT), []);
 });
+
+test("ожидание по нику не различает регистр", () => {
+    //Человек набирает ник по памяти: «Salat» и «salat» — один и тот же ник, и второй вызов
+    //не должен заводить второе ожидание. Обеспечивается коллацией колонки (utf8mb4_unicode_ci),
+    //поэтому и проверяется здесь, в тесте против настоящей MariaDB.
+    return (async (): Promise<void> => {
+        const future = new Date(Date.now() + 60_000);
+
+        await repository.addPending(CHAT, "Добрый Фей", future);
+        await repository.addPending(CHAT, "добрый фей", future);
+
+        assert.equal(await repository.countPendingByChat(CHAT), 1, "разный регистр — одно ожидание");
+        assert.deepEqual(await repository.findPendingByChat(CHAT), ["Добрый Фей"], "сохранилось первое написание");
+
+        await repository.removePending(CHAT, "ДОБРЫЙ ФЕЙ");
+
+        assert.deepEqual(await repository.findPendingByChat(CHAT), [], "снимается независимо от регистра");
+    })();
+});

@@ -273,9 +273,19 @@ export function renderEvent(event: PlayerEvent): string | undefined {
                 : `${OFFLINE} ${nickname} ушёл из очереди ${server}${waited}`;
         }
         case "PLAYER_NICKNAME_CHANGED": {
+            //Оба имени берутся из payload, а не из event.nickname. Тот описывает «кем игрок был
+            //на момент события», и у смены ника его неоткуда взять кроме payload: сессии у события
+            //нет, и сервис одно время подставлял туда УЖЕ НОВОЕ имя — получалось
+            //«Новое имя теперь Новое имя». event.nickname остаётся запасным вариантом.
+            const from = typeof event.payload["old"] === "string" && event.payload["old"] !== ""
+                ? event.payload["old"]
+                : event.nickname;
             const to = typeof event.payload["new"] === "string" ? event.payload["new"] : "";
 
-            return to === "" ? undefined : `${RENAME} ${nickname} теперь <b>${escapeHtml(to)}</b>`;
+            //Сообщение «X теперь X» бесполезно: если имена совпали, сказать нечего.
+            return to === "" || from === to
+                ? undefined
+                : `${RENAME} <b>${escapeHtml(from)}</b> теперь <b>${escapeHtml(to)}</b>`;
         }
         default:
             return undefined;

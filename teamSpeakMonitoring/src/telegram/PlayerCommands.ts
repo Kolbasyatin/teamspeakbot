@@ -209,11 +209,15 @@ export class PlayerCommands implements BotCommands {
         }
 
         //Ожидание снимается по нику без похода в чужой сервис: игрока за ним ещё нет.
+        //Сравнение регистронезависимое, а удаляется ИМЕННО СОХРАНЁННОЕ написание, а не введённое:
+        //коллация MariaDB (utf8mb4_unicode_ci) и так игнорирует регистр, но полагаться на неё
+        //молча нельзя — сменится коллация, и «/unwatch salat» перестанет снимать «Salat».
         const pending = await this.subscriptions.findPendingByChat(chatId);
+        const stored = pending.find(nickname => nickname.toLowerCase() === argument.toLowerCase());
 
-        if (pending.some(nickname => nickname.toLowerCase() === argument.toLowerCase())) {
-            await this.subscriptions.removePending(chatId, argument);
-            await ctx.reply(`Больше не жду игрока «${argument}».`);
+        if (stored !== undefined) {
+            await this.subscriptions.removePending(chatId, stored);
+            await ctx.reply(`Больше не жду игрока «${stored}».`);
             return;
         }
 
