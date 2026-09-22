@@ -4,7 +4,7 @@ import {mock} from "node:test";
 import {PlayerObserverClient} from "./PlayerObserverClient.js";
 import {PlayerObserverUnavailable} from "./PlayerObserver.js";
 
-const PROPERTIES = {baseUrl: "http://observer.test", apiToken: "secret", timeoutMs: 1_000};
+const PROPERTIES = {baseUrl: "http://observer.test", apiToken: "secret", timeoutMs: 1_000, dossierTimeoutMs: 5_000};
 
 //Подменяем fetch: проверяется разбор чужого JSON и обращение с отказами, сеть не нужна.
 function stubFetch(response: {status?: number; body?: unknown} | Error): {calls: {url: string; init: RequestInit}[]} {
@@ -185,4 +185,52 @@ test("ненастроенный наблюдатель не ходит в се�
         (error: unknown) => error instanceof PlayerObserverUnavailable,
     );
     assert.equal(calls.length, 0);
+});
+
+test("досье ждёт дольше обычных запросов", async () => {
+    //Досье при первом обращении собирается синхронно: наблюдатель идёт в arma-reforger-hz,
+    //тот — в четыре метода Valve. Общего таймаута на это не хватает, и бот отваливался
+    //ровно тогда, когда данные наконец приезжали.
+    //
+    //Проверяем поведением, а не подглядыванием в настройки: медленный ответ должен убить
+    //обычный запрос и не убить запрос досье.
+    const client = new PlayerObserverClient({
+        baseUrl: "http://observer.test",
+        apiToken: "secret",
+        timeoutMs: 50,
+        dossierTimeoutMs: 2_000,
+    });
+
+    const original = globalThis.fetch;
+
+    globalThis.fetch = (async (_input: unknown, init?: {signal?: AbortSignal}) => {
+        await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 300);
+
+            init?.signal?.addEventListener("abort", () => {
+                clearTimeout(timer);
+                reject(new DOMException("aborted", "AbortError"));
+            });
+        });
+
+        return new Response(JSON.stringify({players: [], friends: [], profile: null}), {
+            status: 200,
+            headers: {"content-type": "application/json"},
+        });
+    }) as typeof globalThis.fetch;
+
+    try {
+        await assert.rejects(
+            () => client.searchPlayers("Zalex", 5),
+            PlayerObserverUnavailable,
+            "обычный запрос обязан отвалиться по своим 50 мс",
+        );
+
+        const dossier = await client.dossier(7);
+
+        assert.ok(dossier, "досье должно дождаться ответа");
+        assert.equal(dossier.profile, undefined, "профиль null разбирается как «не собран»");
+    } finally {
+        globalThis.fetch = original;
+    }
 });

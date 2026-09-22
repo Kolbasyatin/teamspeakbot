@@ -441,3 +441,59 @@ test("список тёзок для подписки по-прежнему по
     assert.match(text, /за кем следить/);
     assert.ok(buttons.some(data => data?.startsWith("pw:")), "кнопка ожидания на месте");
 });
+
+test("досье: ссылка и SteamID есть даже когда данные не собраны", () => {
+    //Когда собрать не удалось, ссылка полезнее всего: человек откроет профиль сам.
+    //SteamID мы знаем из своих наблюдений, Valve для него не нужна.
+    const text = renderDossier(player(), dossier({profile: undefined, lastError: ""}), NOW);
+
+    assert.match(text, /href="https:\/\/steamcommunity\.com\/profiles\/76561198884181842"/);
+    assert.match(text, /<code>76561198884181842<\/code>/);
+});
+
+test("досье: ссылка Valve имеет приоритет над собранной вручную", () => {
+    const text = renderDossier(player(), dossier({
+        profile: steamProfile({profileUrl: "https://steamcommunity.com/id/shustry/"}),
+    }), NOW);
+
+    assert.match(text, /href="https:\/\/steamcommunity\.com\/id\/shustry\/"/);
+    assert.match(text, /<code>76561198884181842<\/code>/);
+});
+
+test("досье без SteamID не рисует пустую ссылку", () => {
+    const text = renderDossier(player(), dossier({steamId: "", profile: undefined}), NOW);
+
+    assert.doesNotMatch(text, /href=/);
+    assert.doesNotMatch(text, /SteamID/);
+});
+
+test("полные тёзки получают различающие признаки, одиночки — нет", () => {
+    const twins = renderSearchResults([
+        player({playerId: 1, currentNickname: "Zalex", platforms: [{type: "PLATFORM_PC", id: "76561198000001111"}], sessionsTotal: 40}),
+        player({playerId: 2, currentNickname: "Zalex", platforms: [{type: "PLATFORM_PC", id: "76561198000002222"}], sessionsTotal: 3}),
+    ], false, NOW, "Zalex", "info");
+
+    //Обоим дописали, чем они отличаются: иначе строки совпали бы до буквы.
+    assert.match(twins.text, /Steam …1111/);
+    assert.match(twins.text, /Steam …2222/);
+    assert.match(twins.text, /визитов 40/);
+    assert.match(twins.text, /визитов 3/);
+
+    const distinct = renderSearchResults([
+        player({playerId: 1, currentNickname: "Zalex"}),
+        player({playerId: 2, currentNickname: "jimenezalex8898"}),
+    ], false, NOW, "Zalex", "info");
+
+    //Разные ники и так различимы — лишние строки только мешали бы.
+    assert.doesNotMatch(distinct.text, /визитов/);
+});
+
+test("тёзки без Steam различаются платформой", () => {
+    const {text} = renderSearchResults([
+        player({playerId: 1, currentNickname: "Зет", platforms: [{type: "PLATFORM_PSN", id: "1"}]}),
+        player({playerId: 2, currentNickname: "Зет", platforms: [{type: "PLATFORM_XBL", id: "2"}]}),
+    ], false, NOW, "Зет", "card");
+
+    assert.match(text, /PlayStation|PSN/);
+    assert.match(text, /Xbox|XBL/);
+});

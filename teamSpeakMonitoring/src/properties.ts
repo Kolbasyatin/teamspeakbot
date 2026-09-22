@@ -142,6 +142,11 @@ export interface PlayerObserverProperties {
     baseUrl: string;
     apiToken: string;
     timeoutMs: number;
+    //Отдельный, БОЛЬШОЙ таймаут для досье. Обычные запросы к наблюдателю — это чтение из его
+    //базы, доли секунды. Досье при первом обращении идёт дальше: наблюдатель синхронно ходит
+    //в arma-reforger-hz, тот — в четыре метода Valve. Десять секунд там нормальны, и общих
+    //пяти не хватало: бот отваливался по таймауту ровно тогда, когда данные наконец собирались.
+    dossierTimeoutMs: number;
     //Как часто спрашивать новые события. Задержка уведомления складывается из этого интервала
     //и интервала наблюдения на стороне соседа (там минуты), поэтому чаще нескольких секунд смысла нет.
     eventIntervalMs: number;
@@ -173,6 +178,12 @@ const playerObserverConfig = convict<PlayerObserverProperties>({
         format: "nat",
         default: 5_000,
         env: "PLAYERS_API_TIMEOUT_MS",
+    },
+    dossierTimeoutMs: {
+        doc: "Timeout for the Steam dossier request; it collects data synchronously on first call",
+        format: "nat",
+        default: 30_000,
+        env: "PLAYERS_DOSSIER_TIMEOUT_MS",
     },
     eventIntervalMs: {
         doc: "How often the player event feed is polled",

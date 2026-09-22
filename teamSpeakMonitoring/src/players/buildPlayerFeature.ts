@@ -12,6 +12,7 @@ export interface PlayerFeatureProperties {
     baseUrl: string;
     apiToken: string;
     timeoutMs: number;
+    dossierTimeoutMs: number;
     eventIntervalMs: number;
     eventPageSize: number;
     pendingIntervalMs: number;

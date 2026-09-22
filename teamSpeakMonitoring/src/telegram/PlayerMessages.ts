@@ -252,6 +252,45 @@ export function renderPlayerCard(player: ObservedPlayer, subscribed: boolean, no
 //показывают. Предложение «ждать ник» уместно тоже лишь для подписки.
 export type PickerIntent = "watch" | "card" | "history" | "info";
 
+function duplicateNicknames(players: readonly ObservedPlayer[]): Set<string> {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+
+    for (const player of players) {
+        const nickname = player.currentNickname.toLowerCase();
+
+        if (seen.has(nickname)) {
+            duplicates.add(nickname);
+        }
+
+        seen.add(nickname);
+    }
+
+    return duplicates;
+}
+
+//Чем один тёзка отличается от другого. Порядок по убыванию полезности для человека:
+//платформа и хвост Steam-аккаунта опознают человека однозначно, стаж и число визитов
+//отделяют завсегдатая от новичка.
+//
+//Хвост, а не весь SteamID: семнадцать цифр в списке нечитаемы, а последние четыре у двух
+//случайных аккаунтов совпадают редко. Полный id есть в досье.
+function renderDistinguishers(player: ObservedPlayer, now: Date): string {
+    const parts: string[] = [];
+    const pc = player.platforms.find(platform => platform.type === "PLATFORM_PC");
+
+    if (pc !== undefined && pc.id.length >= 4) {
+        parts.push(`Steam …${pc.id.slice(-4)}`);
+    } else if (player.platforms.length > 0) {
+        parts.push(player.platforms.map(platform => platformTitle(platform.type)).join("/"));
+    }
+
+    parts.push(`знаем ${humanAgo(player.firstSeenAt, now)}`);
+    parts.push(`визитов ${player.sessionsTotal}`);
+
+    return parts.join(", ");
+}
+
 const PICKER: Record<PickerIntent, {encode: (playerId: number) => string; footer: string}> = {
     watch: {encode: encodePlayerPick, footer: "Выберите, за кем следить."},
     card: {encode: encodePlayerCard, footer: "Выберите, о ком показать сведения."},
@@ -276,8 +315,17 @@ export function renderSearchResults(
     const keyboard = new InlineKeyboard();
     const picker = PICKER[intent];
 
+    //Полные тёзки: строка «где сейчас» у них может совпасть до буквы, и выбирать станет не по чему.
+    //Таким дописываем различающие признаки. Остальным не дописываем — это был бы шум.
+    const duplicates = duplicateNicknames(players);
+
     players.forEach((player, index) => {
         lines.push(`${index + 1}. ${renderPlayerLine(player, now)}`);
+
+        if (duplicates.has(player.currentNickname.toLowerCase())) {
+            lines.push(`    ${renderDistinguishers(player, now)}`);
+        }
+
         keyboard.text(`${index + 1}. ${player.currentNickname}`, picker.encode(player.playerId)).row();
     });
 
@@ -359,6 +407,9 @@ export function renderDossier(player: ObservedPlayer, dossier: PlayerDossier, no
 
     //Данных нет вовсе. Отрисовать по пустому профилю «библиотека скрыта» было бы прямой
     //неправдой: скрытую библиотеку мы видели, а тут не видели ничего.
+    //
+    //Ссылка и SteamID показываются ВСЁ РАВНО: их мы знаем из своих наблюдений, без Valve.
+    //Именно они полезнее всего, когда собрать не удалось, — человек откроет профиль сам.
     if (profile === undefined) {
         lines.push("Данные Steam по этому игроку ещё не собраны.");
 
@@ -367,6 +418,8 @@ export function renderDossier(player: ObservedPlayer, dossier: PlayerDossier, no
         } else {
             lines.push("", "Он поставлен в очередь — загляните позже.");
         }
+
+        lines.push("", ...renderSteamLink(dossier.steamId));
 
         return lines.join("\n");
     }
@@ -408,11 +461,7 @@ export function renderDossier(player: ObservedPlayer, dossier: PlayerDossier, no
     }
 
     lines.push("", renderDossierFriends(dossier, profile, now));
-
-    if (profile.profileUrl !== "") {
-        lines.push("", profile.profileUrl);
-    }
-
+    lines.push("", ...renderSteamLink(dossier.steamId, profile.profileUrl));
     lines.push("", `<i>данные собраны ${humanAgo(profile.updatedAt, now)}</i>`);
 
     return lines.join("\n");
@@ -474,6 +523,26 @@ function renderDossierFriends(dossier: PlayerDossier, profile: SteamProfile, now
 }
 
 const DOSSIER_FRIENDS = 10;
+
+//Ссылка на профиль и сам SteamID.
+//
+//Адрес строится из SteamID, если Valve своего не прислала: вид /profiles/<id> работает всегда,
+//в том числе для аккаунтов без короткого имени. Поэтому ссылка есть даже у несобранного досье.
+//
+//SteamID отдельной строкой в <code>: в Telegram по такому блоку нажимают и он копируется целиком.
+//Искать игрока по id придётся регулярно — в бан-листе, в чужих базах, в поиске по Steam.
+function renderSteamLink(steamId: string, profileUrl = ""): string[] {
+    if (steamId === "") {
+        return [];
+    }
+
+    const url = profileUrl !== "" ? profileUrl : `https://steamcommunity.com/profiles/${steamId}`;
+
+    return [
+        `<a href="${escapeHtml(url)}">Профиль в Steam</a>`,
+        `SteamID: <code>${escapeHtml(steamId)}</code>`,
+    ];
+}
 
 //Минуты Valve в часы. Меньше часа показываем минутами: «0 ч» у новичка выглядит как ошибка.
 function humanHours(minutes: number): string {

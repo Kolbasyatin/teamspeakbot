@@ -19,6 +19,9 @@ export interface PlayerObserverClientProperties {
     baseUrl: string;
     apiToken: string;
     timeoutMs: number;
+    //Досье собирается синхронно при первом обращении и потому отвечает дольше остальных
+    //запросов — ему свой предел.
+    dossierTimeoutMs: number;
 }
 
 //Единственное место, которое знает, что наблюдатель — это HTTP и JSON. Наружу отдаёт типы
@@ -101,7 +104,7 @@ export class PlayerObserverClient implements PlayerObserver {
 
     public async dossier(playerId: number): Promise<PlayerDossier | null> {
         //404 здесь — «у игрока нет Steam-аккаунта», обычный ответ для консольщика, а не отказ.
-        const body = await this.get(`/players/${playerId}/steam`, [404]);
+        const body = await this.get(`/players/${playerId}/steam`, [404], this.properties.dossierTimeoutMs);
 
         if (body === undefined) {
             return null;
@@ -160,7 +163,11 @@ export class PlayerObserverClient implements PlayerObserver {
 
     //Один путь наружу для всех методов: авторизация, таймаут и превращение любой беды
     //в PlayerObserverUnavailable. Коды из notFoundAs отдаются как undefined — это ответ, а не отказ.
-    private async get(path: string, notFoundAs: readonly number[] = []): Promise<unknown> {
+    private async get(
+        path: string,
+        notFoundAs: readonly number[] = [],
+        timeoutMs: number = this.properties.timeoutMs,
+    ): Promise<unknown> {
         if (this.properties.baseUrl === "") {
             throw new PlayerObserverUnavailable("Наблюдатель за игроками не настроен");
         }
@@ -169,7 +176,7 @@ export class PlayerObserverClient implements PlayerObserver {
 
         try {
             response = await fetchJson(`${this.properties.baseUrl}${path}`, {
-                timeoutMs: this.properties.timeoutMs,
+                timeoutMs,
                 headers: {Authorization: `Bearer ${this.properties.apiToken}`},
             });
         } catch (error) {

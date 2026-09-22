@@ -11,6 +11,7 @@ const PROPERTIES = {
     baseUrl: "http://observer.test",
     apiToken: "secret",
     timeoutMs: 1_000,
+    dossierTimeoutMs: 5_000,
     eventIntervalMs: 15_000,
     eventPageSize: 200,
     pendingIntervalMs: 300_000,
