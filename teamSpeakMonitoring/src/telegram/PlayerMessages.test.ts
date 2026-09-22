@@ -9,6 +9,7 @@ import {
     humanDuration,
     renderAliases,
     renderDossier,
+    renderMatchNote,
     renderEvent,
     renderPlayerCard,
     renderSearchResults,
@@ -496,4 +497,36 @@ test("тёзки без Steam различаются платформой", () =
 
     assert.match(text, /PlayStation|PSN/);
     assert.match(text, /Xbox|XBL/);
+});
+
+test("совпадение по прежнему нику объясняется", () => {
+    //Спросил про Zalex — показали Aidaho. Без пояснения это выглядит как ошибка бота.
+    const note = renderMatchNote(player({currentNickname: "Aidaho", aliases: ["Aidaho", "Zalex"]}), "Zalex");
+
+    assert.ok(note);
+    assert.match(note, /прежнему нику «Zalex»/);
+    assert.match(note, /сейчас он Aidaho/);
+});
+
+test("совпадение по текущему нику не объясняется", () => {
+    assert.equal(renderMatchNote(player({currentNickname: "Salat", aliases: ["Salat", "Zalex"]}), "Salat"), undefined);
+    //Регистр не важен: поиск у наблюдателя тоже регистронезависим.
+    assert.equal(renderMatchNote(player({currentNickname: "Salat", aliases: ["Salat"]}), "salat"), undefined);
+    //Частичное совпадение с текущим ником — тоже не повод пояснять.
+    assert.equal(renderMatchNote(player({currentNickname: "Salatik", aliases: ["Salatik"]}), "Salat"), undefined);
+});
+
+test("поиск по id и пустой запрос ничего не поясняют", () => {
+    const value = player({currentNickname: "Aidaho", aliases: ["Aidaho", "Zalex"]});
+
+    assert.equal(renderMatchNote(value, "4812"), undefined);
+    assert.equal(renderMatchNote(value, ""), undefined);
+});
+
+test("пояснение экранирует ники", () => {
+    const note = renderMatchNote(player({currentNickname: "<b>now</b>", aliases: ["<b>now</b>", "<i>was</i>"]}), "was");
+
+    assert.ok(note);
+    assert.match(note, /&lt;i&gt;was&lt;\/i&gt;/);
+    assert.doesNotMatch(note, /<b>now<\/b>/);
 });

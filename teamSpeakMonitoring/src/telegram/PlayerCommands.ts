@@ -21,6 +21,7 @@ import {
     decodePlayerWait,
     renderAliases,
     renderDossier,
+    renderMatchNote,
     renderPlayerCard,
     renderSearchResults,
     renderSessions,
@@ -604,6 +605,15 @@ export class PlayerCommands implements BotCommands {
         const [single] = found.players;
 
         if (found.players.length === 1 && single && !found.fuzzy) {
+            //Совпадение могло прийти по ПРЕЖНЕМУ нику: поиск идёт по всем алиасам. Молча
+            //показать карточку с другим именем — значит выглядеть ошибкой: человек спросил
+            //про «Zalex», а увидел «Aidaho» без единого слова о том, что это тот же игрок.
+            const note = renderMatchNote(single, argument);
+
+            if (note !== undefined) {
+                await ctx.reply(note, {parse_mode: "HTML"});
+            }
+
             return single;
         }
 

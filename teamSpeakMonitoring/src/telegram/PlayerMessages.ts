@@ -247,6 +247,34 @@ export function renderPlayerCard(player: ObservedPlayer, subscribed: boolean, no
 //из тех, кто нужен, потому что искомый игрок ещё не заходил на наблюдаемые серверы. Без этой кнопки
 //человек упирается в тупик: похожие есть, значит ожидание ему не предложили, а выбрать некого.
 //Пустой query кнопку убирает — так вызывается разбор тёзок при отписке, где ждать нечего.
+//Пояснение, ПОЧЕМУ нашёлся именно этот игрок, когда искали не по его нынешнему нику.
+//
+//Поиск у наблюдателя идёт по всем алиасам, поэтому запрос «Zalex» законно приводит к человеку,
+//которого сейчас зовут Aidaho. Без этой строки ответ выглядит как ошибка: спросил про одного,
+//показали другого. Возвращает undefined, когда пояснять нечего.
+export function renderMatchNote(player: ObservedPlayer, query: string): string | undefined {
+    const wanted = query.trim().toLowerCase();
+
+    //Пустой запрос (выбор кнопкой) и поиск по числовому id пояснять не надо.
+    if (wanted === "" || /^\d+$/.test(wanted)) {
+        return undefined;
+    }
+
+    if (player.currentNickname.toLowerCase().includes(wanted)) {
+        return undefined;
+    }
+
+    //Какой именно прежний ник подошёл. Берём первый подходящий: их может быть несколько
+    //(«Zalex», «Zalex_1»), и для пояснения достаточно любого.
+    const matched = player.aliases.find(alias => alias.toLowerCase().includes(wanted));
+
+    if (matched === undefined) {
+        return undefined;
+    }
+
+    return `Нашёлся по прежнему нику «${escapeHtml(matched)}» — сейчас он ${escapeHtml(player.currentNickname)}.`;
+}
+
 //Зачем открыли список тёзок. От этого зависит и что делает кнопка, и что написано внизу:
 //"watch" — подписаться (единственный случай, когда нажатие что-то меняет), остальные только
 //показывают. Предложение «ждать ник» уместно тоже лишь для подписки.
