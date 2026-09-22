@@ -41,6 +41,36 @@ export function decodePlayerInfo(data: string): number | undefined {
     return match?.[1] === undefined ? undefined : Number(match[1]);
 }
 
+//Кнопки выбора из списка тёзок для команд, которые НИЧЕГО НЕ МЕНЯЮТ: pc:<id> — показать
+//карточку, ph:<id> — показать историю визитов.
+//
+//Отдельные метки, а не общая p:<id>, потому что та переключает подписку. Пока список тёзок
+//был один на все команды, выбор имени в /where, /history и /playerinfo молча подписывал
+//или отписывал человека: команда спрашивала «кого показать», а по нажатию отвечала
+//«больше не слежу за Zalex».
+export const PLAYER_CARD_PATTERN = /^pc:(\d+)$/;
+export const PLAYER_HISTORY_PATTERN = /^ph:(\d+)$/;
+
+export function encodePlayerCard(playerId: number): string {
+    return `pc:${playerId}`;
+}
+
+export function decodePlayerCard(data: string): number | undefined {
+    const match = PLAYER_CARD_PATTERN.exec(data);
+
+    return match?.[1] === undefined ? undefined : Number(match[1]);
+}
+
+export function encodePlayerHistory(playerId: number): string {
+    return `ph:${playerId}`;
+}
+
+export function decodePlayerHistory(data: string): number | undefined {
+    const match = PLAYER_HISTORY_PATTERN.exec(data);
+
+    return match?.[1] === undefined ? undefined : Number(match[1]);
+}
+
 //Кнопка «никого из них — жду этот ник». Формат: pw:<ник>. С кнопками выбора (p:<число>),
 //списка серверов (c:/m:) и карточки (k:) не пересекается.
 export const PLAYER_WAIT_PATTERN = /^pw:/;
@@ -217,11 +247,24 @@ export function renderPlayerCard(player: ObservedPlayer, subscribed: boolean, no
 //из тех, кто нужен, потому что искомый игрок ещё не заходил на наблюдаемые серверы. Без этой кнопки
 //человек упирается в тупик: похожие есть, значит ожидание ему не предложили, а выбрать некого.
 //Пустой query кнопку убирает — так вызывается разбор тёзок при отписке, где ждать нечего.
+//Зачем открыли список тёзок. От этого зависит и что делает кнопка, и что написано внизу:
+//"watch" — подписаться (единственный случай, когда нажатие что-то меняет), остальные только
+//показывают. Предложение «ждать ник» уместно тоже лишь для подписки.
+export type PickerIntent = "watch" | "card" | "history" | "info";
+
+const PICKER: Record<PickerIntent, {encode: (playerId: number) => string; footer: string}> = {
+    watch: {encode: encodePlayerPick, footer: "Выберите, за кем следить."},
+    card: {encode: encodePlayerCard, footer: "Выберите, о ком показать сведения."},
+    history: {encode: encodePlayerHistory, footer: "Выберите, чью историю показать."},
+    info: {encode: encodePlayerInfo, footer: "Выберите, чьё досье показать."},
+};
+
 export function renderSearchResults(
     players: readonly ObservedPlayer[],
     fuzzy: boolean,
     now: Date,
     query = "",
+    intent: PickerIntent = "watch",
 ): {
     text: string;
     keyboard: InlineKeyboard;
@@ -231,15 +274,19 @@ export function renderSearchResults(
         : ["Нашлось несколько игроков с таким ником:", ""];
 
     const keyboard = new InlineKeyboard();
+    const picker = PICKER[intent];
 
     players.forEach((player, index) => {
         lines.push(`${index + 1}. ${renderPlayerLine(player, now)}`);
-        keyboard.text(`${index + 1}. ${player.currentNickname}`, encodePlayerPick(player.playerId)).row();
+        keyboard.text(`${index + 1}. ${player.currentNickname}`, picker.encode(player.playerId)).row();
     });
 
-    lines.push("", "Выберите, за кем следить.");
+    lines.push("", picker.footer);
 
-    if (query !== "") {
+    //«Ждать ник» предлагается только при подписке: для показа сведений ждать нечего,
+    //а кнопка рядом со списком сбивала с толку — она появлялась даже тогда, когда нужный
+    //игрок в списке уже был.
+    if (query !== "" && intent === "watch") {
         const waitData = encodePlayerWait(query);
 
         if (waitData === undefined) {
@@ -310,6 +357,20 @@ export function renderDossier(player: ObservedPlayer, dossier: PlayerDossier, no
     const profile = dossier.profile;
     const lines = [`<b>${escapeHtml(player.currentNickname)}</b> — досье Steam`, ""];
 
+    //Данных нет вовсе. Отрисовать по пустому профилю «библиотека скрыта» было бы прямой
+    //неправдой: скрытую библиотеку мы видели, а тут не видели ничего.
+    if (profile === undefined) {
+        lines.push("Данные Steam по этому игроку ещё не собраны.");
+
+        if (dossier.lastError !== "") {
+            lines.push("", `Причина: ${escapeHtml(dossier.lastError)}`);
+        } else {
+            lines.push("", "Он поставлен в очередь — загляните позже.");
+        }
+
+        return lines.join("\n");
+    }
+
     if (profile.personaName !== "") {
         const real = profile.realName === "" ? "" : ` (${escapeHtml(profile.realName)})`;
 
@@ -346,7 +407,7 @@ export function renderDossier(player: ObservedPlayer, dossier: PlayerDossier, no
         lines.push(bans);
     }
 
-    lines.push("", renderDossierFriends(dossier, now));
+    lines.push("", renderDossierFriends(dossier, profile, now));
 
     if (profile.profileUrl !== "") {
         lines.push("", profile.profileUrl);
@@ -379,8 +440,10 @@ function renderBans(profile: SteamProfile): string | undefined {
     return `⛔ Баны: ${parts.join(", ")}`;
 }
 
-function renderDossierFriends(dossier: PlayerDossier, now: Date): string {
-    if (!dossier.profile.friendsVisible) {
+//Профиль передаётся отдельным параметром, а не берётся из досье: к этому месту он уже
+//проверен на наличие, и компилятору это нужно сказать явно.
+function renderDossierFriends(dossier: PlayerDossier, profile: SteamProfile, now: Date): string {
+    if (!profile.friendsVisible) {
         return "Друзья: список скрыт";
     }
 

@@ -9,9 +9,13 @@ import {
 import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat, TelegramChatType} from "./TelegramChat.js";
 import {
+    PLAYER_CARD_PATTERN,
+    PLAYER_HISTORY_PATTERN,
     PLAYER_INFO_PATTERN,
     PLAYER_PICK_PATTERN,
     PLAYER_WAIT_PATTERN,
+    decodePlayerCard,
+    decodePlayerHistory,
     decodePlayerInfo,
     decodePlayerPick,
     decodePlayerWait,
@@ -21,6 +25,7 @@ import {
     renderSearchResults,
     renderSessions,
     renderSubscriptions,
+    type PickerIntent,
 } from "./PlayerMessages.js";
 
 //Подписки на игроков глазами бота: ровно то, что нужно командам. Интерфейс объявлен здесь,
@@ -148,6 +153,9 @@ export class PlayerCommands implements BotCommands {
         bot.callbackQuery(PLAYER_PICK_PATTERN, ctx => this.pickPlayer(ctx));
         bot.callbackQuery(PLAYER_WAIT_PATTERN, ctx => this.waitByButton(ctx));
         bot.callbackQuery(PLAYER_INFO_PATTERN, ctx => this.dossierByButton(ctx));
+        //Кнопки выбора для команд, которые ничего не меняют.
+        bot.callbackQuery(PLAYER_CARD_PATTERN, ctx => this.cardByButton(ctx));
+        bot.callbackQuery(PLAYER_HISTORY_PATTERN, ctx => this.historyByButton(ctx));
     }
 
     public describe(): BotCommand[] {
@@ -193,7 +201,7 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument);
+        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument, "watch");
 
         await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
     }
@@ -284,7 +292,7 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        const player = await this.resolveOne(ctx, argument);
+        const player = await this.resolveOne(ctx, argument, "card");
 
         if (!player) {
             return;
@@ -303,7 +311,7 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        const player = await this.resolveOne(ctx, argument);
+        const player = await this.resolveOne(ctx, argument, "history");
 
         if (!player) {
             return;
@@ -345,7 +353,7 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        const player = await this.resolveOne(ctx, argument);
+        const player = await this.resolveOne(ctx, argument, "info");
 
         if (!player) {
             return;
@@ -376,6 +384,64 @@ export class PlayerCommands implements BotCommands {
         }
 
         await this.sendDossier(ctx, player);
+    }
+
+    //Выбор из списка тёзок для /where: показываем карточку, ничего не меняя.
+    private async cardByButton(ctx: Context): Promise<void> {
+        const player = await this.playerFromButton(ctx, decodePlayerCard(ctx.callbackQuery?.data ?? ""));
+
+        if (!player) {
+            return;
+        }
+
+        const subscribed = (await this.subscriptions.findSubscribedPlayerIds(ctx.chatId ?? 0))
+            .includes(player.playerId);
+        const {text, keyboard} = renderPlayerCard(player, subscribed, this.now());
+
+        await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
+    }
+
+    //Выбор из списка тёзок для /history.
+    private async historyByButton(ctx: Context): Promise<void> {
+        const player = await this.playerFromButton(ctx, decodePlayerHistory(ctx.callbackQuery?.data ?? ""));
+
+        if (!player) {
+            return;
+        }
+
+        const sessions = await this.withObserver(ctx, () => this.observer.sessions(player.playerId, SESSIONS_LIMIT));
+
+        if (!sessions) {
+            return;
+        }
+
+        await ctx.reply(renderSessions(player, sessions, this.now()), {parse_mode: "HTML"});
+    }
+
+    //Общее начало всех кнопок выбора: подтвердить нажатие и достать игрока по id.
+    private async playerFromButton(ctx: Context, playerId: number | undefined): Promise<ObservedPlayer | undefined> {
+        if (playerId === undefined) {
+            await ctx.answerCallbackQuery("Кнопка устарела");
+            return undefined;
+        }
+
+        //Подтверждаем ДО работы: она ходит в чужой сервис, и всё это время на кнопке
+        //крутился бы индикатор загрузки.
+        await ctx.answerCallbackQuery();
+        await this.rememberChat(ctx);
+
+        const player = await this.withObserver(ctx, () => this.observer.player(playerId));
+
+        if (player === undefined) {
+            return undefined;
+        }
+
+        if (!player) {
+            await ctx.reply("Этого игрока больше нет в наблюдении.");
+            return undefined;
+        }
+
+        return player;
     }
 
     private async sendDossier(ctx: Context, player: ObservedPlayer): Promise<void> {
@@ -517,7 +583,11 @@ export class PlayerCommands implements BotCommands {
     }
 
     //Один игрок для команд, которым выбор не нужен: берём единственного, иначе показываем список.
-    private async resolveOne(ctx: Context, argument: string): Promise<ObservedPlayer | undefined> {
+    //
+    //intent обязателен и определяет, что сделает кнопка выбора. Раньше список был один на все
+    //команды и его кнопки ПЕРЕКЛЮЧАЛИ ПОДПИСКУ: человек спрашивал «покажи досье Zalex»,
+    //выбирал Zalex из двух тёзок и получал «больше не слежу за Zalex».
+    private async resolveOne(ctx: Context, argument: string, intent: PickerIntent): Promise<ObservedPlayer | undefined> {
         const found = await this.find(ctx, argument);
 
         if (!found) {
@@ -537,7 +607,7 @@ export class PlayerCommands implements BotCommands {
             return single;
         }
 
-        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument);
+        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument, intent);
 
         await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
 
@@ -577,7 +647,7 @@ export class PlayerCommands implements BotCommands {
             return undefined;
         }
 
-        const {text, keyboard} = renderSearchResults(matched, false, this.now());
+        const {text, keyboard} = renderSearchResults(matched, false, this.now(), "", "watch");
 
         await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
 

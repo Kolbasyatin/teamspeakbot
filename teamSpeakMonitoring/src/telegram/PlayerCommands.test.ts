@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type {Bot} from "grammy";
 import {PlayerCommands, type ChatRegistry, type PlayerSubscriptionStore} from "./PlayerCommands.js";
-import {encodePlayerInfo, encodePlayerPick, encodePlayerWait} from "./PlayerMessages.js";
+import {decodePlayerPick, encodePlayerCard, encodePlayerHistory, encodePlayerInfo, encodePlayerPick, encodePlayerWait} from "./PlayerMessages.js";
 import type {PlayerObserver} from "../players/PlayerObserver.js";
 import {silentLogger} from "../test/silentLogger.js";
 
@@ -60,6 +60,18 @@ test("у каждой кнопки есть обработчик", () => {
     assert.ok(wait);
     assert.ok(handled(callbackTriggers, wait), "ожидание ненайденного игрока");
     assert.ok(handled(callbackTriggers, encodePlayerInfo(4812)), "досье игрока");
+    assert.ok(handled(callbackTriggers, encodePlayerCard(4812)), "выбор тёзки для /where");
+    assert.ok(handled(callbackTriggers, encodePlayerHistory(4812)), "выбор тёзки для /history");
+});
+
+//Метки выбора не должны пересекаться: pc:7 и ph:7 обязаны попадать каждая в свой обработчик,
+//а НЕ в переключатель подписки p:7. Именно из-за такого пересечения выбор тёзки в /playerinfo
+//отписывал человека от игрока.
+test("выбор тёзки для показа не попадает в переключатель подписки", () => {
+    assert.equal(decodePlayerPick(encodePlayerCard(7)), undefined);
+    assert.equal(decodePlayerPick(encodePlayerHistory(7)), undefined);
+    assert.equal(decodePlayerPick(encodePlayerInfo(7)), undefined);
+    assert.equal(decodePlayerPick(encodePlayerPick(7)), 7);
 });
 
 test("меню и реально зарегистрированные команды совпадают", () => {

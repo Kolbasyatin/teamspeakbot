@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type {ObservedPlayer, PlayerDossier, PlayerEvent, PlayerSession} from "../players/PlayerObserver.js";
+import type {ObservedPlayer, PlayerDossier, PlayerEvent, PlayerSession, SteamProfile} from "../players/PlayerObserver.js";
 import {
     decodePlayerPick,
     decodePlayerWait,
@@ -297,26 +297,32 @@ test("все ники: html в никах экранируется", () => {
     assert.match(text, /&lt;b&gt;hack&lt;\/b&gt;/);
 });
 
+function steamProfile(overrides: Partial<SteamProfile> = {}): SteamProfile {
+    return {
+        personaName: "Шустрый",
+        realName: "",
+        profileUrl: "https://steamcommunity.com/profiles/76561198884181842/",
+        countryCode: "",
+        createdAt: new Date("2019-01-05T00:00:00Z"),
+        visibility: 3,
+        vacBanned: false,
+        vacBanCount: 0,
+        gameBanCount: 0,
+        reforgerMinutes: 51648,
+        reforgerMinutes2w: 1230,
+        gamesVisible: true,
+        friendsVisible: true,
+        updatedAt: new Date("2026-09-11T11:00:00Z"),
+        ...overrides,
+    };
+}
+
 function dossier(overrides: Partial<PlayerDossier> = {}): PlayerDossier {
     return {
         playerId: 7,
         steamId: "76561198884181842",
-        profile: {
-            personaName: "Шустрый",
-            realName: "",
-            profileUrl: "https://steamcommunity.com/profiles/76561198884181842/",
-            countryCode: "",
-            createdAt: new Date("2019-01-05T00:00:00Z"),
-            visibility: 3,
-            vacBanned: false,
-            vacBanCount: 0,
-            gameBanCount: 0,
-            reforgerMinutes: 51648,
-            reforgerMinutes2w: 1230,
-            gamesVisible: true,
-            friendsVisible: true,
-            updatedAt: new Date("2026-09-11T11:00:00Z"),
-        },
+        profile: steamProfile(),
+        lastError: "",
         friends: [],
         friendsKnown: 0,
         ...overrides,
@@ -334,7 +340,7 @@ test("досье: налёт показывается в часах", () => {
 test("досье: скрытая библиотека не превращается в ноль часов", () => {
     //Ноль часов и «мы не знаем» — разные утверждения, и второе нельзя показывать первым.
     const text = renderDossier(player(), dossier({
-        profile: {...dossier().profile, gamesVisible: false, reforgerMinutes: undefined, reforgerMinutes2w: undefined},
+        profile: steamProfile({gamesVisible: false, reforgerMinutes: undefined, reforgerMinutes2w: undefined}),
     }), NOW);
 
     assert.match(text, /библиотека игр скрыта/);
@@ -343,7 +349,7 @@ test("досье: скрытая библиотека не превращает�
 
 test("досье: несобранные баны не показываются как «чисто»", () => {
     const text = renderDossier(player(), dossier({
-        profile: {...dossier().profile, vacBanned: undefined, vacBanCount: undefined, gameBanCount: undefined},
+        profile: steamProfile({vacBanned: undefined, vacBanCount: undefined, gameBanCount: undefined}),
     }), NOW);
 
     assert.doesNotMatch(text, /Баны/);
@@ -351,7 +357,7 @@ test("досье: несобранные баны не показываются 
 
 test("досье: бан показывается заметно", () => {
     const text = renderDossier(player(), dossier({
-        profile: {...dossier().profile, vacBanned: true, vacBanCount: 2},
+        profile: steamProfile({vacBanned: true, vacBanCount: 2}),
     }), NOW);
 
     assert.match(text, /⛔/);
@@ -374,7 +380,7 @@ test("досье: из друзей выделяются те, кого мы в�
 
 test("досье: скрытый список друзей так и называется", () => {
     const text = renderDossier(player(), dossier({
-        profile: {...dossier().profile, friendsVisible: false},
+        profile: steamProfile({friendsVisible: false}),
     }), NOW);
 
     assert.match(text, /список скрыт/);
@@ -387,4 +393,51 @@ test("подписки: под списком есть кнопки досье",
     assert.equal(buttons.length, 1);
     assert.match(String(buttons[0]?.text), /Salat/);
     assert.equal((buttons[0] as {callback_data?: string}).callback_data, "pi:7");
+});
+
+// Регрессия. Пока профиль был обязательным полем, несобранные данные приезжали нулевой
+// структурой, и досье бодро сообщало «библиотека игр скрыта» и «данные собраны 2025 лет назад».
+test("досье: несобранные данные не выдаются за скрытые", () => {
+    const text = renderDossier(player(), dossier({profile: undefined, lastError: ""}), NOW);
+
+    assert.match(text, /ещё не собраны/);
+    assert.doesNotMatch(text, /скрыт/);
+    assert.doesNotMatch(text, /собраны \d+ лет/);
+});
+
+test("досье: причина неудачи показывается человеку", () => {
+    const text = renderDossier(player(), dossier({
+        profile: undefined,
+        lastError: "steam: gateway returned 503",
+    }), NOW);
+
+    assert.match(text, /503/);
+});
+
+// Регрессия. Список тёзок должен предлагать действие той команды, которая его открыла.
+test("список тёзок для досье не подписывает и не предлагает ждать", () => {
+    const {text, keyboard} = renderSearchResults(
+        [player({playerId: 1, currentNickname: "jimenezalex8898"}), player({playerId: 2, currentNickname: "Zalex"})],
+        false,
+        NOW,
+        "Zalex",
+        "info",
+    );
+
+    const buttons = keyboard.inline_keyboard.flat().map(b => (b as {callback_data?: string}).callback_data);
+
+    assert.deepEqual(buttons, ["pi:1", "pi:2"]);
+    assert.match(text, /чьё досье показать/);
+    //«Ждать ник» здесь бессмысленно: человек просил показать, а не следить. Раньше кнопка
+    //появлялась даже когда нужный игрок в списке уже был.
+    assert.doesNotMatch(text, /Ждать/);
+});
+
+test("список тёзок для подписки по-прежнему подписывает и предлагает ждать", () => {
+    const {text, keyboard} = renderSearchResults([player({playerId: 1})], false, NOW, "Zalex", "watch");
+    const buttons = keyboard.inline_keyboard.flat().map(b => (b as {callback_data?: string}).callback_data);
+
+    assert.equal(buttons[0], "p:1");
+    assert.match(text, /за кем следить/);
+    assert.ok(buttons.some(data => data?.startsWith("pw:")), "кнопка ожидания на месте");
 });

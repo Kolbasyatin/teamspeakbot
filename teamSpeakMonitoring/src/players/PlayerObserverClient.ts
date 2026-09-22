@@ -108,11 +108,16 @@ export class PlayerObserverClient implements PlayerObserver {
         }
 
         const profile = readField(body, "profile");
+        const updatedAt = asDate(readField(profile, "updated_at"));
 
         return {
             playerId: asNumber(readField(body, "player_id")) ?? playerId,
             steamId: asString(readField(body, "steam_id")) ?? "",
-            profile: {
+            lastError: asString(readField(body, "last_error")) ?? "",
+            //Профиль без updated_at — не профиль: наблюдатель отдаёт null, когда собрать
+            //ещё не удалось. Подставлять сюда заглушку нельзя, иначе получится «данные
+            //собраны 2025 лет назад» — именно так этот баг и выглядел.
+            profile: updatedAt === undefined ? undefined : {
                 personaName: asString(readField(profile, "persona_name")) ?? "",
                 realName: asString(readField(profile, "real_name")) ?? "",
                 profileUrl: asString(readField(profile, "profile_url")) ?? "",
@@ -126,7 +131,7 @@ export class PlayerObserverClient implements PlayerObserver {
                 reforgerMinutes2w: asNumber(readField(profile, "reforger_minutes_2w")),
                 gamesVisible: readField(profile, "games_visible") === true,
                 friendsVisible: readField(profile, "friends_visible") === true,
-                updatedAt: asDate(readField(profile, "updated_at")) ?? new Date(0),
+                updatedAt,
             },
             friends: asArray(readField(body, "friends")).flatMap(item => {
                 const steamId = asString(readField(item, "steam_id"));

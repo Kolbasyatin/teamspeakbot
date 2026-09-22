@@ -128,7 +128,11 @@ export interface DossierFriend {
 export interface PlayerDossier {
     playerId: number;
     steamId: string;
-    profile: SteamProfile;
+    //undefined — данные ещё ни разу не собрались. Это НЕ то же самое, что «профиль закрыт»:
+    //закрытый профиль мы видели и знаем, что он закрыт, а тут мы не дошли до Valve вовсе.
+    //lastError объясняет почему.
+    profile?: SteamProfile | undefined;
+    lastError: string;
     friends: DossierFriend[];
     friendsKnown: number;
 }
