@@ -1,7 +1,7 @@
 import {formatDuration, intervalToDuration} from "date-fns";
 import {ru} from "date-fns/locale";
 import {InlineKeyboard} from "grammy";
-import type {ObservedPlayer, PlayerEvent, PlayerSession} from "../players/PlayerObserver.js";
+import type {DossierFriend, ObservedPlayer, PlayerDossier, PlayerEvent, PlayerSession, SteamProfile} from "../players/PlayerObserver.js";
 import {escapeHtml} from "./escapeHtml.js";
 
 //Тексты про игроков. Чистые функции, как ServerStatusMessage: данные на входе, текст на выходе,
@@ -23,6 +23,20 @@ export function encodePlayerPick(playerId: number): string {
 
 export function decodePlayerPick(data: string): number | undefined {
     const match = PLAYER_PICK_PATTERN.exec(data);
+
+    return match?.[1] === undefined ? undefined : Number(match[1]);
+}
+
+//Кнопка «показать досье». Формат: pi:<playerId>. Число короткое, в 64 байта callback_data
+//влезает всегда — в отличие от ника, из-за которого кнопке ожидания нужна отдельная проверка.
+export const PLAYER_INFO_PATTERN = /^pi:(\d+)$/;
+
+export function encodePlayerInfo(playerId: number): string {
+    return `pi:${playerId}`;
+}
+
+export function decodePlayerInfo(data: string): number | undefined {
+    const match = PLAYER_INFO_PATTERN.exec(data);
 
     return match?.[1] === undefined ? undefined : Number(match[1]);
 }
@@ -109,13 +123,21 @@ export function renderSubscriptions(
     players: readonly ObservedPlayer[],
     pending: readonly string[],
     now: Date,
-): string {
+): {
+    text: string;
+    keyboard: InlineKeyboard;
+} {
+    const keyboard = new InlineKeyboard();
+
     if (players.length === 0 && pending.length === 0) {
-        return [
-            "Вы ни за кем не следите.",
-            "",
-            "/watch &lt;ник&gt; — найти игрока и подписаться на его вход и выход.",
-        ].join("\n");
+        return {
+            text: [
+                "Вы ни за кем не следите.",
+                "",
+                "/watch &lt;ник&gt; — найти игрока и подписаться на его вход и выход.",
+            ].join("\n"),
+            keyboard,
+        };
     }
 
     const lines = [`Ваши подписки (${players.length}):`, ""];
@@ -127,8 +149,24 @@ export function renderSubscriptions(
         lines.push(...pending.map(nickname => `⏳ ${escapeHtml(nickname)}`));
     }
 
-    return lines.join("\n");
+    //Кнопки досье прямо из списка: иначе человек, глядя на подписки, должен вручную набрать
+    ///playerinfo с ником, который у него перед глазами. Показываем первых SUBSCRIPTION_BUTTONS —
+    //клавиатура на три десятка строк нечитаема, а у остальных есть команда.
+    const withButtons = players.slice(0, SUBSCRIPTION_BUTTONS);
+
+    for (const player of withButtons) {
+        keyboard.text(`🔎 ${player.currentNickname}`, encodePlayerInfo(player.playerId)).row();
+    }
+
+    if (players.length > withButtons.length) {
+        lines.push("", `Досье остальных — /playerinfo &lt;ник&gt;`);
+    }
+
+    return {text: lines.join("\n"), keyboard};
 }
+
+//Сколько кнопок досье показывать под списком подписок.
+const SUBSCRIPTION_BUTTONS = 8;
 
 //Карточка игрока: всё, что о нём известно.
 export function renderPlayerCard(player: ObservedPlayer, subscribed: boolean, now: Date): {
@@ -164,8 +202,10 @@ export function renderPlayerCard(player: ObservedPlayer, subscribed: boolean, no
 
     const keyboard = new InlineKeyboard();
 
-    //Кнопка ровно одна и противоположна текущему состоянию: подписан — «отписаться», и наоборот.
+    //Кнопка подписки противоположна текущему состоянию: подписан — «отписаться», и наоборот.
     keyboard.text(subscribed ? "Отписаться" : "Подписаться", encodePlayerPick(player.playerId));
+    //Досье рядом: человек уже смотрит на игрока, и вводить /playerinfo с ником заново — лишний шаг.
+    keyboard.text("🔎 Досье", encodePlayerInfo(player.playerId));
 
     return {text: lines.join("\n"), keyboard};
 }
@@ -262,6 +302,127 @@ function renderAliasList(player: ObservedPlayer): string {
     const rest = previous.length > ALIAS_LIMIT ? ` и ещё ${previous.length - ALIAS_LIMIT}` : "";
 
     return `${RENAME} Прежние ники (${previous.length}): ${shown}${rest}`;
+}
+
+//Досье Steam. Всё необязательное показывается ТОЛЬКО когда известно: строка «VAC: нет»
+//у несобранных банов и «0 часов» у скрытых игр одинаково вводят в заблуждение.
+export function renderDossier(player: ObservedPlayer, dossier: PlayerDossier, now: Date): string {
+    const profile = dossier.profile;
+    const lines = [`<b>${escapeHtml(player.currentNickname)}</b> — досье Steam`, ""];
+
+    if (profile.personaName !== "") {
+        const real = profile.realName === "" ? "" : ` (${escapeHtml(profile.realName)})`;
+
+        lines.push(`Ник в Steam: ${escapeHtml(profile.personaName)}${real}`);
+    }
+
+    if (profile.createdAt) {
+        lines.push(`Аккаунт создан: ${formatDate(profile.createdAt)} (${humanAgo(profile.createdAt, now)})`);
+    }
+
+    if (profile.countryCode !== "") {
+        lines.push(`Страна: ${escapeHtml(profile.countryCode)}`);
+    }
+
+    //Наигранное — главное число для нас. Скрытые игры честно называем скрытыми:
+    //отсутствие данных и ноль часов — разные вещи, и путать их нельзя.
+    if (profile.gamesVisible) {
+        if (profile.reforgerMinutes === undefined) {
+            lines.push("Reforger: в библиотеке не числится");
+        } else {
+            const recent = profile.reforgerMinutes2w === undefined
+                ? ""
+                : `, за 2 недели ${humanHours(profile.reforgerMinutes2w)}`;
+
+            lines.push(`Reforger: ${humanHours(profile.reforgerMinutes)}${recent}`);
+        }
+    } else {
+        lines.push("Reforger: библиотека игр скрыта");
+    }
+
+    const bans = renderBans(profile);
+
+    if (bans !== undefined) {
+        lines.push(bans);
+    }
+
+    lines.push("", renderDossierFriends(dossier, now));
+
+    if (profile.profileUrl !== "") {
+        lines.push("", profile.profileUrl);
+    }
+
+    lines.push("", `<i>данные собраны ${humanAgo(profile.updatedAt, now)}</i>`);
+
+    return lines.join("\n");
+}
+
+function renderBans(profile: SteamProfile): string | undefined {
+    if (profile.vacBanned === undefined) {
+        return undefined;
+    }
+
+    if (!profile.vacBanned && (profile.gameBanCount ?? 0) === 0) {
+        return "Баны: чисто";
+    }
+
+    const parts: string[] = [];
+
+    if (profile.vacBanned) {
+        parts.push(`VAC ${profile.vacBanCount ?? 1}`);
+    }
+
+    if ((profile.gameBanCount ?? 0) > 0) {
+        parts.push(`игровых ${profile.gameBanCount}`);
+    }
+
+    return `⛔ Баны: ${parts.join(", ")}`;
+}
+
+function renderDossierFriends(dossier: PlayerDossier, now: Date): string {
+    if (!dossier.profile.friendsVisible) {
+        return "Друзья: список скрыт";
+    }
+
+    if (dossier.friends.length === 0) {
+        return "Друзья: никого";
+    }
+
+    //Ценность графа именно в пересечении: не «у него 200 друзей», а «вот эти двое из них
+    //тоже ходят на наши серверы».
+    const known = dossier.friends.filter(friend => friend.playerId !== undefined);
+    const head = `Друзья: ${dossier.friends.length}, из них у нас замечены ${known.length}`;
+
+    if (known.length === 0) {
+        return head;
+    }
+
+    const shown = known.slice(0, DOSSIER_FRIENDS).map(friend => {
+        const seen = friend.lastSeenAt ? `, был ${humanAgo(friend.lastSeenAt, now)}` : "";
+
+        return `  • ${escapeHtml(friend.nickname || friend.steamId)}${seen}`;
+    });
+
+    if (known.length > shown.length) {
+        shown.push(`  • и ещё ${known.length - shown.length}`);
+    }
+
+    return [head, ...shown].join("\n");
+}
+
+const DOSSIER_FRIENDS = 10;
+
+//Минуты Valve в часы. Меньше часа показываем минутами: «0 ч» у новичка выглядит как ошибка.
+function humanHours(minutes: number): string {
+    if (minutes < 60) {
+        return `${minutes} мин`;
+    }
+
+    return `${Math.round(minutes / 60).toLocaleString("ru-RU")} ч`;
+}
+
+function formatDate(date: Date): string {
+    return date.toLocaleDateString("ru-RU", {year: "numeric", month: "long", day: "numeric", timeZone: "UTC"});
 }
 
 //История визитов. Ник визита показывается, только если отличается от текущего: иначе он дублирует

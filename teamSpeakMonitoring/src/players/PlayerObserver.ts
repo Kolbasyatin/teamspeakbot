@@ -96,6 +96,43 @@ export interface PlayerSession {
 
 //Всё, что бот спрашивает у наблюдателя. Узкий интерфейс: ни подписок, ни чатов там нет —
 //они наши и живут в нашей БД.
+//Данные Steam об игроке. Поля необязательные не для красоты: закрытый профиль, скрытые игры
+//и несобранные баны — три разных вида «неизвестно», и показывать их нулями было бы враньём.
+export interface SteamProfile {
+    personaName: string;
+    realName: string;
+    profileUrl: string;
+    countryCode: string;
+    createdAt?: Date | undefined;
+    visibility?: number | undefined;
+    vacBanned?: boolean | undefined;
+    vacBanCount?: number | undefined;
+    gameBanCount?: number | undefined;
+    reforgerMinutes?: number | undefined;
+    reforgerMinutes2w?: number | undefined;
+    gamesVisible: boolean;
+    friendsVisible: boolean;
+    updatedAt: Date;
+}
+
+//Друг из Steam. playerId заполнен, если этот человек встречался на наблюдаемых серверах —
+//ради этого сопоставления граф и хранится.
+export interface DossierFriend {
+    steamId: string;
+    since?: Date | undefined;
+    playerId?: number | undefined;
+    nickname: string;
+    lastSeenAt?: Date | undefined;
+}
+
+export interface PlayerDossier {
+    playerId: number;
+    steamId: string;
+    profile: SteamProfile;
+    friends: DossierFriend[];
+    friendsKnown: number;
+}
+
 export interface PlayerObserver {
     //id последнего события на сейчас. Нужен один раз — чтобы начать читать ленту с «сегодня»,
     //а не с начала времён.
@@ -115,6 +152,14 @@ export interface PlayerObserver {
     sessions(playerId: number, limit: number): Promise<PlayerSession[]>;
 
     trackedServers(): Promise<ObservedServer[]>;
+
+    //Досье Steam. Обращение к нему на стороне наблюдателя ЗАОДНО ставит игрока на регулярное
+    //обновление: интерес человека — лучший признак «этот игрок важен».
+    //
+    //null — у игрока не наблюдалось Steam-аккаунта (играет с консоли). Именно null, а не
+    //undefined: undefined от withObserver означает «наблюдатель недоступен», и путать
+    //«ответил, что нечего показать» с «не ответил» нельзя — сообщения человеку разные.
+    dossier(playerId: number): Promise<PlayerDossier | null>;
 }
 
 //Наблюдатель не отвечает или отвечает мусором. Отдельный тип, чтобы команды могли сказать человеку

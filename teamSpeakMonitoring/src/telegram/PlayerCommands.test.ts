@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type {Bot} from "grammy";
 import {PlayerCommands, type ChatRegistry, type PlayerSubscriptionStore} from "./PlayerCommands.js";
-import {encodePlayerPick, encodePlayerWait} from "./PlayerMessages.js";
+import {encodePlayerInfo, encodePlayerPick, encodePlayerWait} from "./PlayerMessages.js";
 import type {PlayerObserver} from "../players/PlayerObserver.js";
 import {silentLogger} from "../test/silentLogger.js";
 
@@ -59,6 +59,7 @@ test("у каждой кнопки есть обработчик", () => {
 
     assert.ok(wait);
     assert.ok(handled(callbackTriggers, wait), "ожидание ненайденного игрока");
+    assert.ok(handled(callbackTriggers, encodePlayerInfo(4812)), "досье игрока");
 });
 
 test("меню и реально зарегистрированные команды совпадают", () => {

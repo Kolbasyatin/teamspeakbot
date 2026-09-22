@@ -9,11 +9,14 @@ import {
 import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat, TelegramChatType} from "./TelegramChat.js";
 import {
+    PLAYER_INFO_PATTERN,
     PLAYER_PICK_PATTERN,
     PLAYER_WAIT_PATTERN,
+    decodePlayerInfo,
     decodePlayerPick,
     decodePlayerWait,
     renderAliases,
+    renderDossier,
     renderPlayerCard,
     renderSearchResults,
     renderSessions,
@@ -67,6 +70,7 @@ const HELP_TEXT = [
     "/where &lt;ник&gt; — где игрок прямо сейчас",
     "/history &lt;ник&gt; — последние визиты игрока",
     "/aliases &lt;ник&gt; — все ники игрока, по любому из них",
+    "/playerinfo &lt;ник&gt; — досье: Steam, налёт в Reforger, друзья",
     "/observed — какие серверы наблюдаются",
 ].join("\n");
 
@@ -127,6 +131,13 @@ export class PlayerCommands implements BotCommands {
             await this.aliases(ctx, argumentOf(ctx));
         });
 
+        //Досье Steam. Обращение к нему на стороне наблюдателя заодно ставит игрока
+        //на регулярное обновление данных — отдельной команды «начни собирать» не нужно.
+        bot.command("playerinfo", async ctx => {
+            await this.rememberChat(ctx);
+            await this.playerInfo(ctx, argumentOf(ctx));
+        });
+
         bot.command("observed", async ctx => {
             await this.rememberChat(ctx);
             await this.showObservedServers(ctx);
@@ -136,6 +147,7 @@ export class PlayerCommands implements BotCommands {
         //обработчика «кнопка устарела» из SubscriptionCommands: порядок регистрации в grammy значим.
         bot.callbackQuery(PLAYER_PICK_PATTERN, ctx => this.pickPlayer(ctx));
         bot.callbackQuery(PLAYER_WAIT_PATTERN, ctx => this.waitByButton(ctx));
+        bot.callbackQuery(PLAYER_INFO_PATTERN, ctx => this.dossierByButton(ctx));
     }
 
     public describe(): BotCommand[] {
@@ -147,6 +159,7 @@ export class PlayerCommands implements BotCommands {
             {command: "where", description: "где игрок сейчас"},
             {command: "history", description: "последние визиты игрока"},
             {command: "aliases", description: "все ники игрока"},
+            {command: "playerinfo", description: "досье игрока: Steam, налёт, друзья"},
             {command: "observed", description: "какие серверы наблюдаются"},
         ];
     }
@@ -248,7 +261,9 @@ export class PlayerCommands implements BotCommands {
         const pending = await this.subscriptions.findPendingByChat(chatId);
 
         if (ids.length === 0) {
-            await ctx.reply(renderSubscriptions([], pending, this.now()), {parse_mode: "HTML"});
+            const empty = renderSubscriptions([], pending, this.now());
+
+            await ctx.reply(empty.text, {parse_mode: "HTML", reply_markup: empty.keyboard});
             return;
         }
 
@@ -258,7 +273,9 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        await ctx.reply(renderSubscriptions(players, pending, this.now()), {parse_mode: "HTML"});
+        const {text, keyboard} = renderSubscriptions(players, pending, this.now());
+
+        await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
     }
 
     private async where(ctx: Context, argument: string): Promise<void> {
@@ -320,6 +337,64 @@ export class PlayerCommands implements BotCommands {
         }
 
         await ctx.reply(renderAliases(found.players, found.fuzzy, argument, this.now()), {parse_mode: "HTML"});
+    }
+
+    private async playerInfo(ctx: Context, argument: string): Promise<void> {
+        if (argument === "") {
+            await ctx.reply("На кого посмотреть? /playerinfo &lt;ник&gt;", {parse_mode: "HTML"});
+            return;
+        }
+
+        const player = await this.resolveOne(ctx, argument);
+
+        if (!player) {
+            return;
+        }
+
+        await this.sendDossier(ctx, player);
+    }
+
+    //Нажатие «🔎 Досье» из карточки или из списка подписок: id уже известен, искать не нужно.
+    private async dossierByButton(ctx: Context): Promise<void> {
+        const playerId = decodePlayerInfo(ctx.callbackQuery?.data ?? "");
+
+        if (playerId === undefined) {
+            await ctx.answerCallbackQuery("Кнопка устарела");
+            return;
+        }
+
+        //Отвечаем Telegram сразу: сбор данных у наблюдателя может занять несколько секунд,
+        //а нажатая кнопка всё это время крутится.
+        await ctx.answerCallbackQuery();
+        await this.rememberChat(ctx);
+
+        const player = await this.withObserver(ctx, () => this.observer.player(playerId));
+
+        if (!player) {
+            await ctx.reply("Игрок больше не известен наблюдателю.");
+            return;
+        }
+
+        await this.sendDossier(ctx, player);
+    }
+
+    private async sendDossier(ctx: Context, player: ObservedPlayer): Promise<void> {
+        const dossier = await this.withObserver(ctx, () => this.observer.dossier(player.playerId));
+
+        if (dossier === undefined) {
+            return;
+        }
+
+        //null от наблюдателя означает «Steam-аккаунт не наблюдался»: в Reforger играют
+        //и с консолей, и это ответ, а не сбой.
+        if (dossier === null) {
+            await ctx.reply(
+                `У «${player.currentNickname}» не видели Steam-аккаунта — возможно, он играет с консоли.`,
+            );
+            return;
+        }
+
+        await ctx.reply(renderDossier(player, dossier, this.now()), {parse_mode: "HTML"});
     }
 
     private async showObservedServers(ctx: Context): Promise<void> {

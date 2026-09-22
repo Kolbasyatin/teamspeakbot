@@ -6,6 +6,7 @@ import {
     type PlayerEvent,
     type PlayerEventsPage,
     type PlayerLocation,
+    type PlayerDossier,
     type PlayerObserver,
     type PlayerPlatform,
     type PlayerSearchResult,
@@ -98,6 +99,50 @@ export class PlayerObserverClient implements PlayerObserver {
         });
     }
 
+    public async dossier(playerId: number): Promise<PlayerDossier | null> {
+        //404 здесь — «у игрока нет Steam-аккаунта», обычный ответ для консольщика, а не отказ.
+        const body = await this.get(`/players/${playerId}/steam`, [404]);
+
+        if (body === undefined) {
+            return null;
+        }
+
+        const profile = readField(body, "profile");
+
+        return {
+            playerId: asNumber(readField(body, "player_id")) ?? playerId,
+            steamId: asString(readField(body, "steam_id")) ?? "",
+            profile: {
+                personaName: asString(readField(profile, "persona_name")) ?? "",
+                realName: asString(readField(profile, "real_name")) ?? "",
+                profileUrl: asString(readField(profile, "profile_url")) ?? "",
+                countryCode: asString(readField(profile, "country_code")) ?? "",
+                createdAt: asDate(readField(profile, "account_created_at")),
+                visibility: asNumber(readField(profile, "visibility")),
+                vacBanned: asBoolean(readField(profile, "vac_banned")),
+                vacBanCount: asNumber(readField(profile, "vac_ban_count")),
+                gameBanCount: asNumber(readField(profile, "game_ban_count")),
+                reforgerMinutes: asNumber(readField(profile, "reforger_minutes")),
+                reforgerMinutes2w: asNumber(readField(profile, "reforger_minutes_2w")),
+                gamesVisible: readField(profile, "games_visible") === true,
+                friendsVisible: readField(profile, "friends_visible") === true,
+                updatedAt: asDate(readField(profile, "updated_at")) ?? new Date(0),
+            },
+            friends: asArray(readField(body, "friends")).flatMap(item => {
+                const steamId = asString(readField(item, "steam_id"));
+
+                return steamId === undefined ? [] : [{
+                    steamId,
+                    since: asDate(readField(item, "since")),
+                    playerId: asNumber(readField(item, "player_id")),
+                    nickname: asString(readField(item, "nickname")) ?? "",
+                    lastSeenAt: asDate(readField(item, "last_seen_at")),
+                }];
+            }),
+            friendsKnown: asNumber(readField(body, "friends_known")) ?? 0,
+        };
+    }
+
     public async trackedServers(): Promise<ObservedServer[]> {
         const body = await this.get("/servers?tracked=true");
 
@@ -180,6 +225,12 @@ function asArray(value: unknown): unknown[] {
 
 function asNumber(value: unknown): number | undefined {
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+//Отдельно от asNumber/asString: у булевых полей «не пришло» и false — разные вещи.
+//vac_banned = undefined означает «баны ещё не собирали», а не «банов нет».
+function asBoolean(value: unknown): boolean | undefined {
+    return typeof value === "boolean" ? value : undefined;
 }
 
 function asString(value: unknown): string | undefined {

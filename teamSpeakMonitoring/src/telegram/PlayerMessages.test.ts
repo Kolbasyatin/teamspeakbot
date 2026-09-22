@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type {ObservedPlayer, PlayerEvent, PlayerSession} from "../players/PlayerObserver.js";
+import type {ObservedPlayer, PlayerDossier, PlayerEvent, PlayerSession} from "../players/PlayerObserver.js";
 import {
     decodePlayerPick,
     decodePlayerWait,
@@ -8,6 +8,7 @@ import {
     encodePlayerWait,
     humanDuration,
     renderAliases,
+    renderDossier,
     renderEvent,
     renderPlayerCard,
     renderSearchResults,
@@ -67,12 +68,12 @@ test("игрок онлайн и офлайн выглядят по-разном
 });
 
 function renderPlayerLineFor(value: ObservedPlayer): string {
-    return renderSubscriptions([value], [], NOW);
+    return renderSubscriptions([value], [], NOW).text;
 }
 
 test("имя игрока экранируется для HTML", () => {
     //Незакрытый «<» в нике — это не кривая вёрстка, а отказ Telegram разобрать сообщение целиком.
-    const text = renderSubscriptions([player({currentNickname: "<b>hax</b> & co"})], [], NOW);
+    const {text} = renderSubscriptions([player({currentNickname: "<b>hax</b> & co"})], [], NOW);
 
     assert.ok(!text.includes("<b>hax"), text);
     assert.ok(text.includes("&lt;b&gt;hax"), text);
@@ -80,13 +81,13 @@ test("имя игрока экранируется для HTML", () => {
 });
 
 test("пустой список подписок подсказывает, что делать", () => {
-    const text = renderSubscriptions([], [], NOW);
+    const {text} = renderSubscriptions([], [], NOW);
 
     assert.ok(text.includes("/watch"), text);
 });
 
 test("ожидаемые ники показываются отдельным разделом", () => {
-    const text = renderSubscriptions([player()], ["Неуловимый"], NOW);
+    const {text} = renderSubscriptions([player()], ["Неуловимый"], NOW);
 
     assert.ok(text.includes("Ожидают появления"), text);
     assert.ok(text.includes("Неуловимый"), text);
@@ -294,4 +295,96 @@ test("все ники: html в никах экранируется", () => {
     const text = renderAliases([player({aliases: ["Salat", "<b>hack</b>"]})], false, "Salat", NOW);
 
     assert.match(text, /&lt;b&gt;hack&lt;\/b&gt;/);
+});
+
+function dossier(overrides: Partial<PlayerDossier> = {}): PlayerDossier {
+    return {
+        playerId: 7,
+        steamId: "76561198884181842",
+        profile: {
+            personaName: "Шустрый",
+            realName: "",
+            profileUrl: "https://steamcommunity.com/profiles/76561198884181842/",
+            countryCode: "",
+            createdAt: new Date("2019-01-05T00:00:00Z"),
+            visibility: 3,
+            vacBanned: false,
+            vacBanCount: 0,
+            gameBanCount: 0,
+            reforgerMinutes: 51648,
+            reforgerMinutes2w: 1230,
+            gamesVisible: true,
+            friendsVisible: true,
+            updatedAt: new Date("2026-09-11T11:00:00Z"),
+        },
+        friends: [],
+        friendsKnown: 0,
+        ...overrides,
+    };
+}
+
+test("досье: налёт показывается в часах", () => {
+    const text = renderDossier(player(), dossier(), NOW);
+
+    assert.match(text, /861 ч/);
+    assert.match(text, /за 2 недели 21 ч/);
+    assert.match(text, /Баны: чисто/);
+});
+
+test("досье: скрытая библиотека не превращается в ноль часов", () => {
+    //Ноль часов и «мы не знаем» — разные утверждения, и второе нельзя показывать первым.
+    const text = renderDossier(player(), dossier({
+        profile: {...dossier().profile, gamesVisible: false, reforgerMinutes: undefined, reforgerMinutes2w: undefined},
+    }), NOW);
+
+    assert.match(text, /библиотека игр скрыта/);
+    assert.doesNotMatch(text, /0 ч/);
+});
+
+test("досье: несобранные баны не показываются как «чисто»", () => {
+    const text = renderDossier(player(), dossier({
+        profile: {...dossier().profile, vacBanned: undefined, vacBanCount: undefined, gameBanCount: undefined},
+    }), NOW);
+
+    assert.doesNotMatch(text, /Баны/);
+});
+
+test("досье: бан показывается заметно", () => {
+    const text = renderDossier(player(), dossier({
+        profile: {...dossier().profile, vacBanned: true, vacBanCount: 2},
+    }), NOW);
+
+    assert.match(text, /⛔/);
+    assert.match(text, /VAC 2/);
+});
+
+test("досье: из друзей выделяются те, кого мы видели у себя", () => {
+    const text = renderDossier(player(), dossier({
+        friends: [
+            {steamId: "1", playerId: 11, nickname: "Сосед", lastSeenAt: new Date("2026-09-11T10:00:00Z")},
+            {steamId: "2", nickname: ""},
+            {steamId: "3", nickname: ""},
+        ],
+        friendsKnown: 1,
+    }), NOW);
+
+    assert.match(text, /Друзья: 3, из них у нас замечены 1/);
+    assert.match(text, /Сосед/);
+});
+
+test("досье: скрытый список друзей так и называется", () => {
+    const text = renderDossier(player(), dossier({
+        profile: {...dossier().profile, friendsVisible: false},
+    }), NOW);
+
+    assert.match(text, /список скрыт/);
+});
+
+test("подписки: под списком есть кнопки досье", () => {
+    const {keyboard} = renderSubscriptions([player({playerId: 7, currentNickname: "Salat"})], [], NOW);
+    const buttons = keyboard.inline_keyboard.flat();
+
+    assert.equal(buttons.length, 1);
+    assert.match(String(buttons[0]?.text), /Salat/);
+    assert.equal((buttons[0] as {callback_data?: string}).callback_data, "pi:7");
 });

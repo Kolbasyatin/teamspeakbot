@@ -59,6 +59,7 @@ function createObserver(result: PlayerSearchResult): PlayerObserver {
         player: async () => undefined,
         sessions: async () => [],
         trackedServers: async () => [],
+        dossier: async () => null,
     };
 }
 

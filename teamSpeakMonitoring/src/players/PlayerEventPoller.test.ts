@@ -45,6 +45,7 @@ function createObserver(overrides: Partial<PlayerObserver> = {}): PlayerObserver
         player: async () => undefined,
         sessions: async () => [],
         trackedServers: async () => [],
+        dossier: async () => null,
         ...overrides,
     };
 }
