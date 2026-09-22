@@ -13,6 +13,7 @@ import {
     PLAYER_WAIT_PATTERN,
     decodePlayerPick,
     decodePlayerWait,
+    renderAliases,
     renderPlayerCard,
     renderSearchResults,
     renderSessions,
@@ -65,6 +66,7 @@ const HELP_TEXT = [
     "/players — мои подписки и где они сейчас",
     "/where &lt;ник&gt; — где игрок прямо сейчас",
     "/history &lt;ник&gt; — последние визиты игрока",
+    "/aliases &lt;ник&gt; — все ники игрока, по любому из них",
     "/observed — какие серверы наблюдаются",
 ].join("\n");
 
@@ -117,6 +119,14 @@ export class PlayerCommands implements BotCommands {
             await this.history(ctx, argumentOf(ctx));
         });
 
+        //Все ники игрока по любому из них. Отдельная команда, а не часть карточки: искать человека
+        //по полузабытому старому нику — самостоятельная задача, и ответ на неё нужен целиком,
+        //а не в виде «выберите одного из восьми».
+        bot.command("aliases", async ctx => {
+            await this.rememberChat(ctx);
+            await this.aliases(ctx, argumentOf(ctx));
+        });
+
         bot.command("observed", async ctx => {
             await this.rememberChat(ctx);
             await this.showObservedServers(ctx);
@@ -136,6 +146,7 @@ export class PlayerCommands implements BotCommands {
             {command: "players", description: "мои игроки и где они сейчас"},
             {command: "where", description: "где игрок сейчас"},
             {command: "history", description: "последние визиты игрока"},
+            {command: "aliases", description: "все ники игрока"},
             {command: "observed", description: "какие серверы наблюдаются"},
         ];
     }
@@ -288,6 +299,27 @@ export class PlayerCommands implements BotCommands {
         }
 
         await ctx.reply(renderSessions(player, sessions, this.now()), {parse_mode: "HTML"});
+    }
+
+    //В отличие от остальных команд по нику, здесь НЕ используется resolveOne: он на нескольких
+    //совпадениях показывает кнопки «выберите игрока». Для вопроса «а какие ещё ники у этого
+    //человека» правильный ответ — показать всех подошедших сразу, вместе с их никами: однофамильцы
+    //тогда видны рядом, и по списку ников понятно, кто из них нужен.
+    private async aliases(ctx: Context, argument: string): Promise<void> {
+        if (argument === "") {
+            await ctx.reply("Чьи ники показать? /aliases &lt;ник&gt;", {parse_mode: "HTML"});
+            return;
+        }
+
+        const found = await this.find(ctx, argument);
+
+        //undefined — наблюдатель недоступен, про это уже ответили. Пустой список — искали, но не нашли:
+        //похожие подставляет сам наблюдатель, и если и их нет, предлагать нечего.
+        if (!found) {
+            return;
+        }
+
+        await ctx.reply(renderAliases(found.players, found.fuzzy, argument, this.now()), {parse_mode: "HTML"});
     }
 
     private async showObservedServers(ctx: Context): Promise<void> {

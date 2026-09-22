@@ -214,6 +214,56 @@ export function renderSearchResults(
     return {text: lines.join("\n"), keyboard};
 }
 
+//Сколько прежних ников показываем: у долгоживущего игрока их бывают десятки, а сообщение
+//в Telegram ограничено 4096 символами.
+const ALIAS_LIMIT = 25;
+
+//Все ники найденных игроков. Смысл команды: поиск у наблюдателя идёт по ВСЕМ алиасам, поэтому
+//достаточно назвать любое из имён игрока, чтобы получить остальные.
+//
+//Кнопок здесь нет намеренно: это справка, а не выбор. Показываем сразу всех, кто подошёл,
+//вместо того чтобы просить уточнить — однофамильцев видно рядом, и это как раз то, что нужно.
+export function renderAliases(
+    players: readonly ObservedPlayer[],
+    fuzzy: boolean,
+    query: string,
+    now: Date,
+): string {
+    if (players.length === 0) {
+        return `Игрока «${escapeHtml(query)}» мы не видели — ни под этим ником, ни под похожими.`;
+    }
+
+    const lines = fuzzy
+        ? [`Точного совпадения с «${escapeHtml(query)}» нет. Возможно, вы имели в виду:`, ""]
+        : [];
+
+    players.forEach((player, index) => {
+        //Нумеруем, только когда есть из чего выбирать: «1.» у единственного игрока — шум.
+        const number = players.length > 1 ? `${index + 1}. ` : "";
+
+        lines.push(`${number}${renderPlayerLine(player, now)}`);
+        lines.push(renderAliasList(player));
+        lines.push("");
+    });
+
+    return lines.join("\n").trimEnd();
+}
+
+function renderAliasList(player: ObservedPlayer): string {
+    //Текущий ник наблюдатель отдаёт первым, и в заголовке строки он уже назван — в «прежних»
+    //его не повторяем. Сравнение точное: регистр здесь значим, «Salat» и «salat» — разные ники.
+    const previous = player.aliases.filter(alias => alias !== player.currentNickname);
+
+    if (previous.length === 0) {
+        return `${RENAME} Других ников не было.`;
+    }
+
+    const shown = previous.slice(0, ALIAS_LIMIT).map(alias => escapeHtml(alias)).join(", ");
+    const rest = previous.length > ALIAS_LIMIT ? ` и ещё ${previous.length - ALIAS_LIMIT}` : "";
+
+    return `${RENAME} Прежние ники (${previous.length}): ${shown}${rest}`;
+}
+
 //История визитов. Ник визита показывается, только если отличается от текущего: иначе он дублирует
 //заголовок в каждой строке.
 export function renderSessions(player: ObservedPlayer, sessions: readonly PlayerSession[], now: Date): string {

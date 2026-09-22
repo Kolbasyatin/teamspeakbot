@@ -7,6 +7,7 @@ import {
     encodePlayerPick,
     encodePlayerWait,
     humanDuration,
+    renderAliases,
     renderEvent,
     renderPlayerCard,
     renderSearchResults,
@@ -245,4 +246,52 @@ test("без old в payload берётся ник события", () => {
 
     assert.ok(text?.includes("Старый"), text);
     assert.ok(text?.includes("Новый"), text);
+});
+
+test("все ники: текущий в заголовке, прежние отдельной строкой", () => {
+    const text = renderAliases([player({aliases: ["Salat", "Добрый Фей", "SaLaT"]})], false, "Добрый", NOW);
+
+    assert.match(text, /Salat/);
+    assert.match(text, /Прежние ники \(2\)/);
+    assert.match(text, /Добрый Фей/);
+    assert.match(text, /SaLaT/);
+    //Текущий ник уже назван в строке игрока — в перечне прежних его быть не должно.
+    assert.equal(text.match(/Salat/g)?.length, 1);
+});
+
+test("все ники: игрок без переименований", () => {
+    const text = renderAliases([player()], false, "Salat", NOW);
+
+    assert.match(text, /Других ников не было/);
+});
+
+test("все ники: при неточном совпадении список подписан как похожие", () => {
+    const text = renderAliases([player({aliases: ["Salat"]})], true, "Salad", NOW);
+
+    assert.match(text, /Точного совпадения с «Salad» нет/);
+});
+
+test("все ники: нескольких игроков нумеруем", () => {
+    const text = renderAliases(
+        [player({playerId: 1, currentNickname: "Alpha", aliases: ["Alpha"]}),
+         player({playerId: 2, currentNickname: "Alpha2", aliases: ["Alpha2"]})],
+        false,
+        "Alpha",
+        NOW,
+    );
+
+    assert.match(text, /1\. /);
+    assert.match(text, /2\. /);
+});
+
+test("все ники: ничего не нашлось", () => {
+    const text = renderAliases([], false, "Никого", NOW);
+
+    assert.match(text, /мы не видели/);
+});
+
+test("все ники: html в никах экранируется", () => {
+    const text = renderAliases([player({aliases: ["Salat", "<b>hack</b>"]})], false, "Salat", NOW);
+
+    assert.match(text, /&lt;b&gt;hack&lt;\/b&gt;/);
 });
