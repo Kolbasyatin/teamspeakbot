@@ -114,6 +114,11 @@ services:
 
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      # Ключ Steam Web API для данных об игроках (/steam/{steamId64}). Двойное подчёркивание —
+      # то, как .NET выражает вложенность SteamWebApi:ApiKey через переменную окружения.
+      # Живёт только в secrets.env; :- делает его необязательным, иначе без ключа ругался бы
+      # весь стек. Пусто — эндпоинт отвечает 503, выдача токена работает как раньше.
+      SteamWebApi__ApiKey: "${STEAM_WEB_API_KEY:-}"
 
     volumes:
       - ./arma-token-data:/data
