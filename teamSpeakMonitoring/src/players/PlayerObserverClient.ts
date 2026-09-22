@@ -104,7 +104,21 @@ export class PlayerObserverClient implements PlayerObserver {
 
     public async dossier(playerId: number): Promise<PlayerDossier | null> {
         //404 здесь — «у игрока нет Steam-аккаунта», обычный ответ для консольщика, а не отказ.
-        const body = await this.get(`/players/${playerId}/steam`, [404], this.properties.dossierTimeoutMs);
+        return this.fetchDossier(`/players/${playerId}/steam`, [404], playerId);
+    }
+
+    public async dossierBySteamId(steamId: string): Promise<PlayerDossier | null> {
+        //400 — наблюдатель не принял формат id. Ответ, а не сбой: подсказать человека,
+        //что SteamID64 это 17 цифр, лучше, чем сказать «сервис недоступен».
+        return this.fetchDossier(`/steam/${steamId}`, [400], 0);
+    }
+
+    private async fetchDossier(
+        path: string,
+        absentAs: readonly number[],
+        fallbackPlayerId: number,
+    ): Promise<PlayerDossier | null> {
+        const body = await this.get(path, absentAs, this.properties.dossierTimeoutMs);
 
         if (body === undefined) {
             return null;
@@ -114,7 +128,8 @@ export class PlayerObserverClient implements PlayerObserver {
         const updatedAt = asDate(readField(profile, "updated_at"));
 
         return {
-            playerId: asNumber(readField(body, "player_id")) ?? playerId,
+            playerId: asNumber(readField(body, "player_id")) ?? fallbackPlayerId,
+            nickname: asString(readField(body, "nickname")) ?? "",
             steamId: asString(readField(body, "steam_id")) ?? "",
             lastError: asString(readField(body, "last_error")) ?? "",
             //Профиль без updated_at — не профиль: наблюдатель отдаёт null, когда собрать

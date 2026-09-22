@@ -126,7 +126,11 @@ export interface DossierFriend {
 }
 
 export interface PlayerDossier {
+    //0 — этот Steam-аккаунт у нас не наблюдался. Досье можно запросить и по произвольному
+    //SteamID, никак с Arma не связанному: Steam про нашу игру ничего не знает.
     playerId: number;
+    //Как его зовут в игре у нас. Пусто вместе с playerId.
+    nickname: string;
     steamId: string;
     //undefined — данные ещё ни разу не собрались. Это НЕ то же самое, что «профиль закрыт»:
     //закрытый профиль мы видели и знаем, что он закрыт, а тут мы не дошли до Valve вовсе.
@@ -164,6 +168,9 @@ export interface PlayerObserver {
     //undefined: undefined от withObserver означает «наблюдатель недоступен», и путать
     //«ответил, что нечего показать» с «не ответил» нельзя — сообщения человеку разные.
     dossier(playerId: number): Promise<PlayerDossier | null>;
+
+    //То же по произвольному SteamID64. null — наблюдатель ответил «неверный формат».
+    dossierBySteamId(steamId: string): Promise<PlayerDossier | null>;
 }
 
 //Наблюдатель не отвечает или отвечает мусором. Отдельный тип, чтобы команды могли сказать человеку

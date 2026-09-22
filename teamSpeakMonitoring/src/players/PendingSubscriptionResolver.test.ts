@@ -60,6 +60,7 @@ function createObserver(result: PlayerSearchResult): PlayerObserver {
         sessions: async () => [],
         trackedServers: async () => [],
         dossier: async () => null,
+        dossierBySteamId: async () => null,
     };
 }
 

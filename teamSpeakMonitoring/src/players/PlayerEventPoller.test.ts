@@ -46,6 +46,7 @@ function createObserver(overrides: Partial<PlayerObserver> = {}): PlayerObserver
         sessions: async () => [],
         trackedServers: async () => [],
         dossier: async () => null,
+        dossierBySteamId: async () => null,
         ...overrides,
     };
 }

@@ -441,9 +441,23 @@ function renderAliasList(player: ObservedPlayer): string {
 
 //Досье Steam. Всё необязательное показывается ТОЛЬКО когда известно: строка «VAC: нет»
 //у несобранных банов и «0 часов» у скрытых игр одинаково вводят в заблуждение.
-export function renderDossier(player: ObservedPlayer, dossier: PlayerDossier, now: Date): string {
+//player необязателен: досье можно запросить и по произвольному SteamID, у которого нашего
+//игрока нет вовсе. Заголовок тогда берётся из ника в Steam, а в крайнем случае из самого id.
+export function renderDossier(
+    dossier: PlayerDossier,
+    now: Date,
+    player?: ObservedPlayer | undefined,
+): string {
     const profile = dossier.profile;
-    const lines = [`<b>${escapeHtml(player.currentNickname)}</b> — досье Steam`, ""];
+    const title = player?.currentNickname ?? dossier.nickname ?? "";
+    const heading = title !== "" ? title : (profile?.personaName ?? "") || dossier.steamId;
+    const lines = [`<b>${escapeHtml(heading)}</b> — досье Steam`, ""];
+
+    //Связка «этот Steam-аккаунт — наш игрок» и есть главная ценность поиска по id.
+    //Показываем её, только когда спрашивали НЕ про нашего игрока: иначе это повтор заголовка.
+    if (player === undefined && dossier.nickname !== "") {
+        lines.push(`У нас известен как <b>${escapeHtml(dossier.nickname)}</b>.`, "");
+    }
 
     //Данных нет вовсе. Отрисовать по пустому профилю «библиотека скрыта» было бы прямой
     //неправдой: скрытую библиотеку мы видели, а тут не видели ничего.

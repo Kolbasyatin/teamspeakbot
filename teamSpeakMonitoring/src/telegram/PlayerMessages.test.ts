@@ -321,6 +321,7 @@ function steamProfile(overrides: Partial<SteamProfile> = {}): SteamProfile {
 function dossier(overrides: Partial<PlayerDossier> = {}): PlayerDossier {
     return {
         playerId: 7,
+        nickname: "",
         steamId: "76561198884181842",
         profile: steamProfile(),
         lastError: "",
@@ -331,7 +332,7 @@ function dossier(overrides: Partial<PlayerDossier> = {}): PlayerDossier {
 }
 
 test("досье: налёт показывается в часах", () => {
-    const text = renderDossier(player(), dossier(), NOW);
+    const text = renderDossier(dossier(), NOW, player());
 
     assert.match(text, /861 ч/);
     assert.match(text, /за 2 недели 21 ч/);
@@ -340,49 +341,49 @@ test("досье: налёт показывается в часах", () => {
 
 test("досье: скрытая библиотека не превращается в ноль часов", () => {
     //Ноль часов и «мы не знаем» — разные утверждения, и второе нельзя показывать первым.
-    const text = renderDossier(player(), dossier({
+    const text = renderDossier(dossier({
         profile: steamProfile({gamesVisible: false, reforgerMinutes: undefined, reforgerMinutes2w: undefined}),
-    }), NOW);
+    }), NOW, player());
 
     assert.match(text, /библиотека игр скрыта/);
     assert.doesNotMatch(text, /0 ч/);
 });
 
 test("досье: несобранные баны не показываются как «чисто»", () => {
-    const text = renderDossier(player(), dossier({
+    const text = renderDossier(dossier({
         profile: steamProfile({vacBanned: undefined, vacBanCount: undefined, gameBanCount: undefined}),
-    }), NOW);
+    }), NOW, player());
 
     assert.doesNotMatch(text, /Баны/);
 });
 
 test("досье: бан показывается заметно", () => {
-    const text = renderDossier(player(), dossier({
+    const text = renderDossier(dossier({
         profile: steamProfile({vacBanned: true, vacBanCount: 2}),
-    }), NOW);
+    }), NOW, player());
 
     assert.match(text, /⛔/);
     assert.match(text, /VAC 2/);
 });
 
 test("досье: из друзей выделяются те, кого мы видели у себя", () => {
-    const text = renderDossier(player(), dossier({
+    const text = renderDossier(dossier({
         friends: [
             {steamId: "1", playerId: 11, nickname: "Сосед", lastSeenAt: new Date("2026-09-11T10:00:00Z")},
             {steamId: "2", nickname: ""},
             {steamId: "3", nickname: ""},
         ],
         friendsKnown: 1,
-    }), NOW);
+    }), NOW, player());
 
     assert.match(text, /Друзья: 3, из них у нас замечены 1/);
     assert.match(text, /Сосед/);
 });
 
 test("досье: скрытый список друзей так и называется", () => {
-    const text = renderDossier(player(), dossier({
+    const text = renderDossier(dossier({
         profile: steamProfile({friendsVisible: false}),
-    }), NOW);
+    }), NOW, player());
 
     assert.match(text, /список скрыт/);
 });
@@ -399,7 +400,7 @@ test("подписки: под списком есть кнопки досье",
 // Регрессия. Пока профиль был обязательным полем, несобранные данные приезжали нулевой
 // структурой, и досье бодро сообщало «библиотека игр скрыта» и «данные собраны 2025 лет назад».
 test("досье: несобранные данные не выдаются за скрытые", () => {
-    const text = renderDossier(player(), dossier({profile: undefined, lastError: ""}), NOW);
+    const text = renderDossier(dossier({profile: undefined, lastError: ""}), NOW, player());
 
     assert.match(text, /ещё не собраны/);
     assert.doesNotMatch(text, /скрыт/);
@@ -407,10 +408,10 @@ test("досье: несобранные данные не выдаются за
 });
 
 test("досье: причина неудачи показывается человеку", () => {
-    const text = renderDossier(player(), dossier({
+    const text = renderDossier(dossier({
         profile: undefined,
         lastError: "steam: gateway returned 503",
-    }), NOW);
+    }), NOW, player());
 
     assert.match(text, /503/);
 });
@@ -446,23 +447,23 @@ test("список тёзок для подписки по-прежнему по
 test("досье: ссылка и SteamID есть даже когда данные не собраны", () => {
     //Когда собрать не удалось, ссылка полезнее всего: человек откроет профиль сам.
     //SteamID мы знаем из своих наблюдений, Valve для него не нужна.
-    const text = renderDossier(player(), dossier({profile: undefined, lastError: ""}), NOW);
+    const text = renderDossier(dossier({profile: undefined, lastError: ""}), NOW, player());
 
     assert.match(text, /href="https:\/\/steamcommunity\.com\/profiles\/76561198884181842"/);
     assert.match(text, /<code>76561198884181842<\/code>/);
 });
 
 test("досье: ссылка Valve имеет приоритет над собранной вручную", () => {
-    const text = renderDossier(player(), dossier({
+    const text = renderDossier(dossier({
         profile: steamProfile({profileUrl: "https://steamcommunity.com/id/shustry/"}),
-    }), NOW);
+    }), NOW, player());
 
     assert.match(text, /href="https:\/\/steamcommunity\.com\/id\/shustry\/"/);
     assert.match(text, /<code>76561198884181842<\/code>/);
 });
 
 test("досье без SteamID не рисует пустую ссылку", () => {
-    const text = renderDossier(player(), dossier({steamId: "", profile: undefined}), NOW);
+    const text = renderDossier(dossier({steamId: "", profile: undefined}), NOW, player());
 
     assert.doesNotMatch(text, /href=/);
     assert.doesNotMatch(text, /SteamID/);
@@ -572,4 +573,32 @@ test("без подписок список не меняет порядок и �
 
     assert.deepEqual(buttons, ["pi:1", "pi:2"]);
     assert.doesNotMatch(text, /следим/);
+});
+
+test("досье по SteamID без нашего игрока: заголовок из ника в Steam", () => {
+    //Аккаунта может не быть в Arma вовсе — Steam про нашу игру ничего не знает.
+    const text = renderDossier(dossier({playerId: 0, nickname: "", profile: steamProfile({personaName: "everything"})}), NOW);
+
+    assert.match(text, /<b>everything<\/b> — досье Steam/);
+    assert.doesNotMatch(text, /У нас известен как/);
+});
+
+test("досье по SteamID: без данных заголовок из самого id", () => {
+    const text = renderDossier(dossier({playerId: 0, nickname: "", profile: undefined}), NOW);
+
+    assert.match(text, /<b>76561198884181842<\/b> — досье Steam/);
+});
+
+test("досье по SteamID: знакомый аккаунт связывается с нашим игроком", () => {
+    //Ради этой связки обратный поиск и нужен: по id узнать, кто это у нас.
+    const text = renderDossier(dossier({playerId: 42, nickname: "Salat"}), NOW);
+
+    assert.match(text, /<b>Salat<\/b> — досье Steam/);
+    assert.match(text, /У нас известен как <b>Salat<\/b>/);
+});
+
+test("досье по игроку не повторяет связку с самим собой", () => {
+    const text = renderDossier(dossier({playerId: 42, nickname: "Salat"}), NOW, player({currentNickname: "Salat"}));
+
+    assert.doesNotMatch(text, /У нас известен как/);
 });

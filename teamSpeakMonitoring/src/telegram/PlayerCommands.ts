@@ -77,6 +77,7 @@ const HELP_TEXT = [
     "/history &lt;ник&gt; — последние визиты игрока",
     "/aliases &lt;ник&gt; — все ники игрока, по любому из них",
     "/playerinfo &lt;ник&gt; — досье: Steam, налёт в Reforger, друзья",
+    "/steaminfo &lt;SteamID64&gt; — досье по Steam-аккаунту, даже если в Arma его не было",
     "/observed — какие серверы наблюдаются",
 ].join("\n");
 
@@ -144,6 +145,13 @@ export class PlayerCommands implements BotCommands {
             await this.playerInfo(ctx, argumentOf(ctx));
         });
 
+        //Досье по SteamID64 напрямую. Игрока в Arma может не быть вовсе: Steam про нашу игру
+        //ничего не знает, и связь с наблюдаемыми серверами здесь не нужна.
+        bot.command("steaminfo", async ctx => {
+            await this.rememberChat(ctx);
+            await this.steamInfo(ctx, argumentOf(ctx));
+        });
+
         bot.command("observed", async ctx => {
             await this.rememberChat(ctx);
             await this.showObservedServers(ctx);
@@ -169,6 +177,7 @@ export class PlayerCommands implements BotCommands {
             {command: "history", description: "последние визиты игрока"},
             {command: "aliases", description: "все ники игрока"},
             {command: "playerinfo", description: "досье игрока: Steam, налёт, друзья"},
+            {command: "steaminfo", description: "досье по SteamID64"},
             {command: "observed", description: "какие серверы наблюдаются"},
         ];
     }
@@ -446,6 +455,29 @@ export class PlayerCommands implements BotCommands {
         return player;
     }
 
+    private async steamInfo(ctx: Context, argument: string): Promise<void> {
+        if (argument === "") {
+            await ctx.reply("Чей аккаунт посмотреть? /steaminfo &lt;SteamID64&gt;", {parse_mode: "HTML"});
+            return;
+        }
+
+        const dossier = await this.withObserver(ctx, () => this.observer.dossierBySteamId(argument));
+
+        if (dossier === undefined) {
+            return;
+        }
+
+        //null — наблюдатель не принял формат. SteamID64 это ровно 17 цифр; всё остальное
+        //(ссылка на профиль, короткое имя аккаунта) требует отдельного разрешения имени,
+        //которого у нас нет.
+        if (dossier === null) {
+            await ctx.reply("SteamID64 — это 17 цифр, например 76561198884181842.");
+            return;
+        }
+
+        await ctx.reply(renderDossier(dossier, this.now()), {parse_mode: "HTML"});
+    }
+
     private async sendDossier(ctx: Context, player: ObservedPlayer): Promise<void> {
         const dossier = await this.withObserver(ctx, () => this.observer.dossier(player.playerId));
 
@@ -462,7 +494,7 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        await ctx.reply(renderDossier(player, dossier, this.now()), {parse_mode: "HTML"});
+        await ctx.reply(renderDossier(dossier, this.now(), player), {parse_mode: "HTML"});
     }
 
     private async showObservedServers(ctx: Context): Promise<void> {
