@@ -202,7 +202,8 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument, "watch");
+        const {text, keyboard} = renderSearchResults(
+            found.players, found.fuzzy, this.now(), argument, "watch", await this.subscribedIds(ctx));
 
         await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
     }
@@ -617,11 +618,18 @@ export class PlayerCommands implements BotCommands {
             return single;
         }
 
-        const {text, keyboard} = renderSearchResults(found.players, found.fuzzy, this.now(), argument, intent);
+        const {text, keyboard} = renderSearchResults(
+            found.players, found.fuzzy, this.now(), argument, intent, await this.subscribedIds(ctx));
 
         await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
 
         return undefined;
+    }
+
+    //Подписки чата для пометки в списке выбора. Отдельным методом, потому что нужен двум местам
+    //и потому что чат может быть неизвестен — тогда просто никого не помечаем.
+    private async subscribedIds(ctx: Context): Promise<Set<number>> {
+        return new Set(await this.subscriptions.findSubscribedPlayerIds(ctx.chatId ?? 0));
     }
 
     //Игрок среди подписок чата: для /unwatch по нику. Ищем среди своих, а не по всему каталогу,

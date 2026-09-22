@@ -12,6 +12,8 @@ const ONLINE = "🟢";
 const OFFLINE = "⚪";
 const QUEUE = "🕒";
 const RENAME = "✏️";
+//Пометка «за этим игроком мы уже следим» в списке выбора.
+const WATCHED = "⭐";
 
 //Метка выбора игрока из результатов поиска. Формат: p:<playerId>. С форматами списка серверов
 //(пять частей) и карточки не пересекается: там своя первая буква и своё число частей.
@@ -332,10 +334,17 @@ export function renderSearchResults(
     now: Date,
     query = "",
     intent: PickerIntent = "watch",
+    subscribed: ReadonlySet<number> = new Set(),
 ): {
     text: string;
     keyboard: InlineKeyboard;
 } {
+    //Свои — наверх. Популярный ник вроде Winnie встречается у шести разных людей, и почти
+    //всегда нужен тот, за кем уже следят. Порядок внутри групп сохраняется: сортировка
+    //в JS стабильна, и исходное упорядочивание наблюдателя (по свежести или похожести) не теряется.
+    const ordered = [...players].sort((left, right) =>
+        Number(subscribed.has(right.playerId)) - Number(subscribed.has(left.playerId)));
+
     const lines = fuzzy
         ? ["Точных совпадений нет. Возможно, вы имели в виду:", ""]
         : ["Нашлось несколько игроков с таким ником:", ""];
@@ -345,16 +354,19 @@ export function renderSearchResults(
 
     //Полные тёзки: строка «где сейчас» у них может совпасть до буквы, и выбирать станет не по чему.
     //Таким дописываем различающие признаки. Остальным не дописываем — это был бы шум.
-    const duplicates = duplicateNicknames(players);
+    const duplicates = duplicateNicknames(ordered);
 
-    players.forEach((player, index) => {
-        lines.push(`${index + 1}. ${renderPlayerLine(player, now)}`);
+    ordered.forEach((player, index) => {
+        const mine = subscribed.has(player.playerId);
+        const mark = mine ? `${WATCHED} ` : "";
+
+        lines.push(`${index + 1}. ${renderPlayerLine(player, now)}${mine ? ` ${WATCHED} следим` : ""}`);
 
         if (duplicates.has(player.currentNickname.toLowerCase())) {
             lines.push(`    ${renderDistinguishers(player, now)}`);
         }
 
-        keyboard.text(`${index + 1}. ${player.currentNickname}`, picker.encode(player.playerId)).row();
+        keyboard.text(`${mark}${index + 1}. ${player.currentNickname}`, picker.encode(player.playerId)).row();
     });
 
     lines.push("", picker.footer);

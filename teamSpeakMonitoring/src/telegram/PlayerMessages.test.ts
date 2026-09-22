@@ -530,3 +530,46 @@ test("пояснение экранирует ники", () => {
     assert.match(note, /&lt;i&gt;was&lt;\/i&gt;/);
     assert.doesNotMatch(note, /<b>now<\/b>/);
 });
+
+test("отслеживаемые тёзки идут первыми и помечаются", () => {
+    //Популярный ник встречается у нескольких людей, и почти всегда нужен тот, за кем следят.
+    const {text, keyboard} = renderSearchResults(
+        [
+            player({playerId: 1, currentNickname: "Winnie"}),
+            player({playerId: 2, currentNickname: "Winnie"}),
+            player({playerId: 3, currentNickname: "Winnie"}),
+        ],
+        false,
+        NOW,
+        "Winnie",
+        "info",
+        new Set([3]),
+    );
+
+    const buttons = keyboard.inline_keyboard.flat().map(b => (b as {callback_data?: string}).callback_data);
+
+    const labels = keyboard.inline_keyboard.flat().map(b => String(b.text));
+
+    assert.equal(buttons[0], "pi:3", "подписка должна быть первой");
+    assert.equal(labels[0], "⭐ 1. Winnie", "подпись кнопки помечена и читается");
+    assert.equal(labels[1], "2. Winnie");
+    assert.deepEqual(buttons.slice(1), ["pi:1", "pi:2"], "остальные сохраняют исходный порядок");
+    assert.match(text, /1\. .*⭐ следим/);
+    //Пометка только у своего: иначе она ничего не различает.
+    assert.equal(text.match(/⭐ следим/g)?.length, 1);
+});
+
+test("без подписок список не меняет порядок и ничего не помечает", () => {
+    const {text, keyboard} = renderSearchResults(
+        [player({playerId: 1, currentNickname: "Winnie"}), player({playerId: 2, currentNickname: "Winnie"})],
+        false,
+        NOW,
+        "Winnie",
+        "info",
+    );
+
+    const buttons = keyboard.inline_keyboard.flat().map(b => (b as {callback_data?: string}).callback_data);
+
+    assert.deepEqual(buttons, ["pi:1", "pi:2"]);
+    assert.doesNotMatch(text, /следим/);
+});
