@@ -145,6 +145,7 @@ export class PlayerObserverClient implements PlayerObserver {
                 vacBanned: asBoolean(readField(profile, "vac_banned")),
                 vacBanCount: asNumber(readField(profile, "vac_ban_count")),
                 gameBanCount: asNumber(readField(profile, "game_ban_count")),
+                daysSinceLastBan: asNumber(readField(profile, "days_since_last_ban")),
                 reforgerMinutes: asNumber(readField(profile, "reforger_minutes")),
                 reforgerMinutes2w: asNumber(readField(profile, "reforger_minutes_2w")),
                 gamesVisible: readField(profile, "games_visible") === true,

@@ -108,6 +108,9 @@ export interface SteamProfile {
     vacBanned?: boolean | undefined;
     vacBanCount?: number | undefined;
     gameBanCount?: number | undefined;
+    //Дней с последнего бана. У аккаунта без банов Valve присылает 0 — это её значение,
+    //а не «бан сегодня», поэтому смотреть на него можно только вместе со счётчиками.
+    daysSinceLastBan?: number | undefined;
     reforgerMinutes?: number | undefined;
     reforgerMinutes2w?: number | undefined;
     gamesVisible: boolean;

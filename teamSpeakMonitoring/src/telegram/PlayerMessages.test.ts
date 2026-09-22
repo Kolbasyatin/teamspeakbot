@@ -357,13 +357,51 @@ test("досье: несобранные баны не показываются 
     assert.doesNotMatch(text, /Баны/);
 });
 
-test("досье: бан показывается заметно", () => {
+test("VAC-бан подсвечивается как читерство, с датой и оговоркой про Reforger", () => {
     const text = renderDossier(dossier({
-        profile: steamProfile({vacBanned: true, vacBanCount: 2}),
+        profile: steamProfile({vacBanned: true, vacBanCount: 2, daysSinceLastBan: 619}),
     }), NOW, player());
 
-    assert.match(text, /⛔/);
-    assert.match(text, /VAC 2/);
+    assert.match(text, /🚨/);
+    assert.match(text, /пойман на читах/);
+    assert.match(text, /\(2, последний 31 декабря 2024/);
+    //Без оговорки читатель решит, что забанен за Reforger, — а игра под VAC не ходит.
+    assert.match(text, /Reforger под VAC не ходит/);
+
+    //Предупреждение обязано стоять выше сведений об аккаунте, иначе его не заметят.
+    assert.ok(text.indexOf("пойман на читах") < text.indexOf("Ник в Steam"), "предупреждение должно быть сверху");
+    //И не дублироваться строкой «Баны:» внизу.
+    assert.doesNotMatch(text, /Баны:/);
+});
+
+test("бан от разработчика формулируется осторожнее VAC", () => {
+    //Студии банят и за читы, и за накрутку, и за оскорбления. Valve причину не раскрывает,
+    //поэтому называть человека читером на этом основании нельзя.
+    const text = renderDossier(dossier({
+        profile: steamProfile({vacBanned: false, vacBanCount: 0, gameBanCount: 1, daysSinceLastBan: 619}),
+    }), NOW, player());
+
+    assert.match(text, /⚠️/);
+    assert.match(text, /Бан от разработчика игры/);
+    assert.match(text, /\(1, последний 31 декабря 2024/);
+    assert.match(text, /Причину Valve не раскрывает/);
+    assert.doesNotMatch(text, /пойман на читах/);
+});
+
+test("чистый аккаунт не пугает предупреждениями", () => {
+    const text = renderDossier(dossier(), NOW, player());
+
+    assert.doesNotMatch(text, /🚨|⚠️/);
+    assert.match(text, /Баны: чисто/);
+});
+
+test("без данных о банах не утверждается ни «чисто», ни «бан»", () => {
+    const text = renderDossier(dossier({
+        profile: steamProfile({vacBanned: undefined, vacBanCount: undefined, gameBanCount: undefined}),
+    }), NOW, player());
+
+    assert.doesNotMatch(text, /Баны/);
+    assert.doesNotMatch(text, /🚨|⚠️/);
 });
 
 test("досье: из друзей выделяются те, кого мы видели у себя", () => {

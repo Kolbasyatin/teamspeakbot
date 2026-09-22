@@ -478,6 +478,10 @@ export function renderDossier(
         return lines.join("\n");
     }
 
+    //Бан за читы — первое, что должно броситься в глаза. Поэтому он идёт сразу под заголовком,
+    //а не строкой среди прочего внизу.
+    lines.push(...renderCheatWarning(profile, now));
+
     if (profile.personaName !== "") {
         const real = profile.realName === "" ? "" : ` (${escapeHtml(profile.realName)})`;
 
@@ -521,6 +525,8 @@ export function renderDossier(
     return lines.join("\n");
 }
 
+//Строка про баны ВНИЗУ карточки — только для чистого аккаунта. Когда баны есть, о них уже
+//сказано предупреждением под заголовком, и повторять незачем.
 function renderBans(profile: SteamProfile): string | undefined {
     if (profile.vacBanned === undefined) {
         return undefined;
@@ -530,17 +536,62 @@ function renderBans(profile: SteamProfile): string | undefined {
         return "Баны: чисто";
     }
 
-    const parts: string[] = [];
+    return undefined;
+}
 
-    if (profile.vacBanned) {
-        parts.push(`VAC ${profile.vacBanCount ?? 1}`);
+//Предупреждение о банах. Два уровня, и различать их обязательно:
+//
+//VAC — это буквально «античит Valve поймал на читах». Утверждение однозначное.
+//
+//Бан от разработчика выдаётся через издательский API Valve и причину не раскрывает: чаще всего
+//это читы, но бывает и за travel-абуз, накрутку, оскорбления. Поэтому формулировка осторожнее —
+//писать «читер» там, где студия могла забанить за что угодно, нечестно.
+function renderCheatWarning(profile: SteamProfile, now: Date): string[] {
+    const vac = profile.vacBanned === true;
+    const games = profile.gameBanCount ?? 0;
+
+    if (!vac && games === 0) {
+        return [];
     }
 
-    if ((profile.gameBanCount ?? 0) > 0) {
-        parts.push(`игровых ${profile.gameBanCount}`);
+    const when = banDate(profile, now);
+    const dated = when === undefined ? "" : `, последний ${formatDate(when)}`;
+    const lines: string[] = [];
+
+    if (vac) {
+        const count = profile.vacBanCount ?? 1;
+
+        lines.push(`🚨 <b>VAC-бан: пойман на читах</b> (${count}${dated})`);
+        //Без этой оговорки вывод напрашивается неверный. Reforger под VAC не ходит —
+        //в его категориях в Steam нет «Valve Anti-Cheat enabled», — значит бан из другой игры.
+        lines.push("<i>Reforger под VAC не ходит: бан получен в другой игре.</i>");
     }
 
-    return `⛔ Баны: ${parts.join(", ")}`;
+    if (games > 0) {
+        const dates = vac ? "" : dated;
+
+        lines.push(`⚠️ <b>Бан от разработчика игры</b> (${games}${dates})`);
+        lines.push("<i>Причину Valve не раскрывает. Чаще всего это читы, но бывает и другое.</i>");
+    }
+
+    lines.push("");
+
+    return lines;
+}
+
+//Дата последнего бана из «сколько дней назад». Точность до суток — большего Valve не даёт,
+//и это единственный способ превратить «619 дней назад» в читаемое «11 января 2025».
+function banDate(profile: SteamProfile, now: Date): Date | undefined {
+    const days = profile.daysSinceLastBan;
+
+    //0 у аккаунта без банов — значение Valve по умолчанию. Сюда мы попадаем только когда бан
+    //есть, но 0 всё равно осмыслен: бан сегодня. Отличить их можно лишь по счётчикам,
+    //а они уже проверены вызывающим.
+    if (days === undefined) {
+        return undefined;
+    }
+
+    return new Date(now.getTime() - days * 24 * 60 * 60 * 1_000);
 }
 
 //Профиль передаётся отдельным параметром, а не берётся из досье: к этому месту он уже
