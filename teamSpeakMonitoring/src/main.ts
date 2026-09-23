@@ -19,6 +19,7 @@ import {
     stateSyncProperties,
     roundFinishProperties,
     teamSpeakChannelNames,
+    teamSpeakQueryProperties,
     bohemiaProperties,
     playerObserverProperties,
 } from "./properties.js";
@@ -108,7 +109,7 @@ async function main(): Promise<any> {
         bohemia: new BohemiaLobbyQuerier(bohemiaProperties, biTokens, log),
     });
     //Одно query-подключение к TeamSpeak на процесс: его делят нотифаер и команды бота.
-    const teamSpeakConnection = new TeamSpeakConnection(properties, log);
+    const teamSpeakConnection = new TeamSpeakConnection(properties, log, teamSpeakQueryProperties.timeoutMs);
     const teamSpeakClient = new TeamSpeakClient(teamSpeakConnection);
     const pool = createPool(dbConfig);
     const serverRepository = new ServerRepository(pool);
@@ -170,7 +171,8 @@ async function main(): Promise<any> {
                     log.error({error}, "Не удалось пересобрать список опроса после изменения подписок");
                 });
             }),
-        ])
+        //child с меткой: строки Telegram отбираются из общего лога одним фильтром (component=telegram).
+        ], log.child({component: "telegram"}), tgProperties.updateTimeoutMs)
         : undefined;
 
     if (!telegramApi) {

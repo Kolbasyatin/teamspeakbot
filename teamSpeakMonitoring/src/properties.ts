@@ -70,6 +70,7 @@ export interface SyncServerPort {
 export interface TGProperties {
     token: string;
     channelId: string;
+    updateTimeoutMs: number;
 }
 
 export interface MonitorProperties {
@@ -322,6 +323,21 @@ const stateSyncConfig = convict<StateSyncProperties>({
     },
 });
 
+//Отдельно от TeamSpeakProperties: те целиком уходят в TeamSpeak.connect(), а это не параметр
+//библиотеки, а наша защита от неё — у ts3-nodejs-library нет таймаута на команду.
+export interface TeamSpeakQueryProperties {
+    timeoutMs: number;
+}
+
+const teamSpeakQueryConfig = convict<TeamSpeakQueryProperties>({
+    timeoutMs: {
+        doc: "Timeout in milliseconds for one TeamSpeak operation, including connect",
+        format: "nat",
+        default: 10_000,
+        env: "TS_QUERY_TIMEOUT_MS",
+    },
+});
+
 const syncServerConfig = convict<SyncServerPort>({
     port: {
         doc: "Sync Server port",
@@ -343,6 +359,12 @@ const tgConfig = convict<TGProperties>({
         format: String,
         default: "",
         env: "TELEGRAM_CHANNEL_ID",
+    },
+    updateTimeoutMs: {
+        doc: "Deadline in milliseconds for handling one Telegram update before polling moves on",
+        format: "nat",
+        default: 60_000,
+        env: "TELEGRAM_UPDATE_TIMEOUT_MS",
     },
 });
 
@@ -423,6 +445,7 @@ teamSpeakChannelsConfig.validate({allowed: "strict"});
 tgConfig.validate({allowed: "strict"});
 monitorConfig.validate({allowed: "strict"});
 stateSyncConfig.validate({allowed: "strict"});
+teamSpeakQueryConfig.validate({allowed: "strict"});
 bohemiaConfig.validate({allowed: "strict"});
 playerObserverConfig.validate({allowed: "strict"});
 
@@ -433,6 +456,7 @@ export const teamSpeakChannelNames = teamSpeakChannelsConfig.getProperties();
 export const tgProperties = tgConfig.getProperties();
 export const monitorProperties = monitorConfig.getProperties();
 export const stateSyncProperties = stateSyncConfig.getProperties();
+export const teamSpeakQueryProperties = teamSpeakQueryConfig.getProperties();
 export const roundFinishProperties = roundFinishConfig.getProperties();
 export const bohemiaProperties = bohemiaConfig.getProperties();
 export const playerObserverProperties = playerObserverConfig.getProperties();

@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Bot, Transformer} from "grammy";
+import type {Logger} from "pino";
 import {TelegramBot, type BotCommands} from "./TelegramBot.js";
+
+const silentLogger = {debug: () => {}, info: () => {}, warn: () => {}, error: () => {}} as unknown as Logger;
 
 //Настоящий Bot здесь не нужен: проверяется только то, что владелец раздаёт его всем наборам
 //и вешает обработчик ошибок. Сеть, long polling и api не участвуют.
@@ -11,8 +14,10 @@ function createBotStub(): Bot & {caught: boolean} {
         catch: (): void => {
             stub.caught = true;
         },
-        //Конструктор ставит трансформер (выключение превью ссылок), поэтому заглушке нужен api.config.
+        //Конструктор ставит трансформеры (диагностика, выключение превью ссылок) и middleware
+        //диагностики, поэтому заглушке нужны api.config и use.
         api: {config: {use: (): void => undefined}},
+        use: (): void => undefined,
     };
 
     return stub as unknown as Bot & {caught: boolean};
@@ -34,14 +39,14 @@ test("каждому набору команд отдаётся бот", () => {
     new TelegramBot(createBotStub(), [
         createCommands("status", registered),
         createCommands("subscriptions", registered),
-    ]);
+    ], silentLogger, 60_000);
 
     assert.deepEqual(registered, ["status", "subscriptions"]);
 });
 
 test("пустой список наборов — не ошибка", () => {
     //Бот без команд остаётся рабочим: уведомления идут через sender и long polling им не нужен.
-    const bot = new TelegramBot(createBotStub(), []);
+    const bot = new TelegramBot(createBotStub(), [], silentLogger, 60_000);
 
     assert.ok(bot.sender);
 });
@@ -51,7 +56,7 @@ test("меню собирается из всех наборов", () => {
     const bot = new TelegramBot(createBotStub(), [
         createCommands("status", []),
         createCommands("subscriptions", []),
-    ]);
+    ], silentLogger, 60_000);
 
     assert.deepEqual(bot.describeMenu().map(item => item.command), ["status", "subscriptions"]);
 });
@@ -61,7 +66,7 @@ test("обработчик ошибок вешается всегда", () => {
     //до перезапуска процесса.
     const stub = createBotStub();
 
-    new TelegramBot(stub, []);
+    new TelegramBot(stub, [], silentLogger, 60_000);
 
     assert.equal(stub.caught, true);
 });
@@ -80,19 +85,22 @@ test("превью ссылок выключено для всего исход�
             },
         },
         catch: (): void => undefined,
+        use: (): void => undefined,
     } as unknown as Bot;
 
-    new TelegramBot(bot, []);
+    new TelegramBot(bot, [], silentLogger, 60_000);
 
-    assert.equal(transformers.length, 1, "трансформер должен ставиться в конструкторе");
+    assert.equal(transformers.length, 2, "трансформеры должны ставиться в конструкторе");
 
     const prev = async (method: string, payload: Record<string, unknown>): Promise<never> => {
         calls.push({method, payload});
-        return undefined as never;
+        return {ok: true, result: true} as never;
     };
-    const transformer = transformers[0];
-
-    assert.ok(transformer);
+    //Проверяется вся цепочка, а не трансформер по индексу: диагностика стоит в ней же и обязана
+    //пропускать payload как есть.
+    type ApiCall = Parameters<Transformer>[0];
+    const transformer: Transformer = (base, method, payload, signal) => transformers
+        .reduce<ApiCall>((inner, outer) => ((m, p, s) => outer(inner, m, p, s)) as ApiCall, base)(method, payload, signal);
 
     //sendMessage и editMessageText получают умолчание, остальные методы не трогаются.
     await transformer(prev as never, "sendMessage" as never, {chat_id: 1, text: "привет"} as never, undefined);

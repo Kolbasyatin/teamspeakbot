@@ -1,7 +1,8 @@
 import type {Bot, BotError} from "grammy";
 import type {BotCommand} from "grammy/types";
+import type {Logger} from "pino";
 import {TelegramSender} from "./TelegramSender.js";
-import {log} from "../logger.js";
+import {createApiLogger, createUpdateDeadline, createUpdateLogger, PollingWatchdog} from "./TelegramDiagnostics.js";
 
 //Набор команд: знает, как повесить свои обработчики на бота и как назвать себя в меню.
 //Зависимости у каждого набора свои — командам TeamSpeak нужно соединение, командам подписок
@@ -35,17 +36,37 @@ export class TelegramBot {
     //решают подписки, и знать об этом боту незачем.
     public readonly sender: TelegramSender;
 
+    //Как часто спрашивать watchdog. Порог «стоит» у него 90 с, проверка раз в 15 с — погрешность мала.
+    private static readonly WATCHDOG_CHECK_MS = 15_000;
+
     //Собирается из наборов, а не пишется отдельным списком: иначе добавленную команду легко
     //зарегистрировать и забыть показать.
     private readonly menu: BotCommand[];
+
+    //Следит, ходит ли бот за апдейтами. Проверку дёргает таймер, живущий между start() и stop().
+    private readonly watchdog: PollingWatchdog;
+    private watchdogTimer: NodeJS.Timeout | undefined;
 
     //Bot создаётся в composition root: один long polling и один api-клиент на процесс.
     constructor(
         private readonly bot: Bot,
         commands: readonly BotCommands[],
+        private readonly logger: Logger,
+        //Потолок на обработку одного апдейта, TELEGRAM_UPDATE_TIMEOUT_MS. См. createUpdateDeadline.
+        updateTimeoutMs: number,
     ) {
         this.sender = new TelegramSender(bot);
         this.menu = commands.flatMap(set => set.describe());
+        this.watchdog = new PollingWatchdog(logger);
+
+        //Диагностика ставится первой: трансформер видит каждый вызов Bot API, middleware —
+        //каждый апдейт до любого набора команд, поэтому замер включает всю обработку.
+        //Зачем она вообще — см. TelegramDiagnostics.
+        bot.api.config.use(createApiLogger(logger, this.watchdog));
+        bot.use(createUpdateLogger(logger, this.watchdog));
+        //Следом — дедлайн: grammy не зовёт следующий getUpdates, пока не отработал обработчик,
+        //и один повисший обработчик делал бота глухим до перезапуска контейнера.
+        bot.use(createUpdateDeadline(logger, updateTimeoutMs));
 
         //Превью ссылок выключается один раз на весь исходящий трафик, а не в каждом вызове reply.
         //Названия серверов почти всегда содержат приглашение в discord, и Telegram рисует под
@@ -78,7 +99,7 @@ export class TelegramBot {
         //а работает другое. Точка останова для отладчика — здесь же: сюда приходит и ошибка,
         //и контекст апдейта, на котором она случилась.
         bot.catch((error: BotError) => {
-            log.error(
+            this.logger.error(
                 {error: error.error, updateId: error.ctx.update.update_id, chatId: error.ctx.chatId},
                 "Ошибка при обработке апдейта Telegram",
             );
@@ -97,15 +118,26 @@ export class TelegramBot {
         //публикация для групп ничего не добавляет; если подсказки не появились сразу, дело
         //в кэше клиента Telegram, а не в области.
         void this.bot.api.setMyCommands(this.menu).catch((error: unknown) => {
-            log.error({error}, "Не удалось опубликовать меню команд Telegram");
+            this.logger.error({error}, "Не удалось опубликовать меню команд Telegram");
         });
 
-        void this.bot.start().catch((error: unknown) => {
-            log.error({error}, "Long polling Telegram остановлен ошибкой — бот не принимает команды");
+        this.watchdog.started(Date.now());
+        //unref: таймер наблюдения не должен держать процесс живым при остановке.
+        this.watchdogTimer = setInterval(() => this.watchdog.check(Date.now()), TelegramBot.WATCHDOG_CHECK_MS);
+        this.watchdogTimer.unref();
+
+        void this.bot.start({
+            onStart: botInfo => this.logger.info({username: botInfo.username}, "Long polling Telegram запущен"),
+        }).then(() => {
+            this.logger.info("Long polling Telegram остановлен");
+        }, (error: unknown) => {
+            this.logger.error({error}, "Long polling Telegram остановлен ошибкой — бот не принимает команды");
         });
     }
 
     public async stop(): Promise<void> {
+        clearInterval(this.watchdogTimer);
+        this.watchdogTimer = undefined;
         await this.bot.stop();
     }
 

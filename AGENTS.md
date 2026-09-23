@@ -136,7 +136,11 @@ teamSpeakMonitoring/         сам сервис
                              Пустой BOHEMIA_TOKEN_URL — источники bohemia молчат
       fetchJson.ts           общий fetch с таймаутом для REST и Bohemia
     teamspeak/             ← адаптер TeamSpeak
-      TeamSpeakConnection.ts жизненный цикл одного query-соединения (SSH), lazy connect, close
+      TeamSpeakConnection.ts жизненный цикл одного query-соединения (SSH), lazy connect, close.
+                             Любая операция — через run(name, action) с потолком TS_QUERY_TIMEOUT_MS:
+                             у библиотеки нет таймаута на команду, а при закрытии сокета она не
+                             отклоняет висящие промисы. Не уложилась — соединение выбрасывается
+                             (forceQuit), следующий run() подключится заново
       TeamSpeakClient.ts     единственное место, знающее про ts3-nodejs-library API
       ChannelDescriptionRenderer.ts  ServerProbeSnapshot[] → BBCode-строка описания канала.
                              render() — с отметкой времени (в канал), renderBody() — без неё
@@ -148,7 +152,16 @@ teamSpeakMonitoring/         сам сервис
                              setMyCommands; обязателен, чтобы новый набор не выпал из меню молча).
                              ВХОДЯЩЕЕ (команды, кнопки) работает только после start() — это запуск
                              long polling; ИСХОДЯЩЕЕ (sender) работает всегда, sendMessage полингу
-                             не подчинён. Без bot.catch ошибка в обработчике гасит polling целиком
+                             не подчинён. Без bot.catch ошибка в обработчике гасит polling целиком.
+                             Logger — через конструктор (child с component=telegram)
+      TelegramDiagnostics.ts ходит ли бот за апдейтами и где встал. Трансформер Bot API (каждый
+                             вызов, getUpdates целиком), middleware на апдейт (команда, чат,
+                             длительность), PollingWatchdog (тревога, если цикл молчит 90 с,
+                             с причиной: висит обработчик / висит getUpdates / цикл не зовёт;
+                             info-сводка раз в 10 минут). Здесь же createUpdateDeadline — потолок
+                             на обработку апдейта (TELEGRAM_UPDATE_TIMEOUT_MS): grammy зовёт
+                             следующий getUpdates только после обработчика, и один повисший
+                             делал бота глухим до рестарта контейнера
       TeamSpeakCommands.ts   всё, что бот умеет про TeamSpeak: пока только /who; здесь же
                              OnlineNicknamesSource. Раньше назывался StatusCommands и держал
                              ещё /time (уехал синонимом /status — показывал чужие подписки)
@@ -312,6 +325,17 @@ teamSpeakMonitoring/         сам сервис
     `unknown → online` на первом опросе (см. долг, п. 14).
 - **Один query-коннект на процесс.** `TeamSpeakConnection` держит одно SSH-соединение; его делят `TeamSpeakChannelNotifier`
   (через `TeamSpeakClient`) и Telegram-команда `/who`. Закрывает его `main` при shutdown.
+  Каждая операция идёт с потолком `TS_QUERY_TIMEOUT_MS` (итерация 12b): соединение, на котором
+  команда не уложилась, выбрасывается — в его очереди застряла команда, и всё, что встанет за ней,
+  повиснет тоже.
+- **Приём команд Telegram — одна очередь на всех.** Встроенный long polling grammy обрабатывает
+  апдейты последовательно: следующий `getUpdates` уходит только после того, как отработали
+  обработчики предыдущей пачки. Поэтому повисший обработчик — это не «одна команда не ответила»,
+  а «бот оглох целиком» (причём уведомления продолжают уходить: `sendMessage` циклу не подчинён).
+  Страховки две: дедлайн на апдейт (`TELEGRAM_UPDATE_TIMEOUT_MS`, итерация 12c) и таймауты у каждой
+  внешней зависимости обработчиков. Увидеть, что происходит, — `TelegramDiagnostics` (итерация 12a):
+  строки с `component=telegram`, в проде на info видны сводка раз в 10 минут, ошибки и тревога
+  «Polling Telegram стоит». Подробный поток (каждый `getUpdates` и апдейт) — `LOG_LEVEL=debug`.
 - **`syncServers` vs `forceSync`.** `syncServers` (`POST /internal/reload-servers`) добавляет/удаляет probes,
   не трогая существующие — их состояние и таймеры сохраняются. `forceSync`
   (`POST /internal/force-reload-servers`) пересоздаёт все probes — нужен, когда в БД поменялись поля
@@ -369,6 +393,9 @@ teamSpeakMonitoring/         сам сервис
 | `TEAMSPEAK_NOTIFIER` | `false` | вкл. обновление описания канала |
 | `LOG_NOTIFIER` | `true` | вкл. вывод события в лог |
 | `TELEGRAM_NOTIFIER` | `false` | вкл. Telegram-уведомления о статусах |
+| `TELEGRAM_UPDATE_TIMEOUT_MS` | `60000` | потолок обработки одного апдейта; дольше — бот идёт за следующими, обработчик брошен. Больше самого долгого законного ответа (досье — до 30 с) |
+| `TS_QUERY_TIMEOUT_MS` | `10000` | потолок одной операции TeamSpeak вместе с подключением |
+| `LOG_LEVEL` | `debug` вне prod, `info` в prod | `debug` показывает каждый `getUpdates`, апдейт и вызов Bot API |
 | `TELEGRAM_TOKEN` / `TELEGRAM_CHANNEL_ID` | `""` | бот и **владелец табло TeamSpeak**: адресатов уведомлений задают подписки, а этот чат определяет, чьи подписки показывает описание канала. Не число (пусто или `@username`) — владельца нет, табло пустое, в лог `warn` |
 | `DB_HOST` | `127.0.0.11` | MariaDB (в compose — имя сервиса, напр. `mariadb`) |
 | `DB_PORT` | `3306` | |
@@ -776,8 +803,8 @@ npm run test:repo  # только src/persistence/*.test.ts
    структуры строки `monitored_servers` в `MonitoredServer.ts`.
 7. 🟡 **Частично, итерации 2 и 4a.** Логирование двумя стилями. `Logger` в конструктор получают
    `ServerMonitor`, `ServerProbe`, `TeamSpeakConnection`, `Scheduler`, `NotificationDispatcher`,
-   `LogNotifier`, `A2sQuerier`, `RestQuerier`. Глобальный `log` остался в `TelegramBot`
-   и `AdminServer` (плюс `main.ts`, где это уместно) — итерация 7.
+   `LogNotifier`, `A2sQuerier`, `RestQuerier`, с итерации 12a — `TelegramBot`. Глобальный `log`
+   остался в `AdminServer` и наборах команд Telegram (плюс `main.ts`, где это уместно) — итерация 7.
 8. ✅ **Закрыто, итерация 2:** `close()` убран из интерфейса `Notifier` целиком, вместе
    с обвязкой в диспетчере. Ресурсами владеет `main.ts`. История, чтобы не возвращаться к вопросу:
    `Notifier.close()` — обвязка, оставшаяся от прошлой версии: дедупликация через `Set`,
@@ -841,6 +868,11 @@ npm run test:repo  # только src/persistence/*.test.ts
 15. `ServerProbe` конструктор: обязательный `logger` идёт после параметров с дефолтами.
 16. `ChannelDescriptionRenderer` форматирует время жёстко в `Europe/Moscow` и вызывает `new Date()` внутри — это
     делает вид недетерминированным и нетестируемым.
+26. **У запросов к MariaDB нет таймаута** (найдено в итерации 12, 2026-09-23). Пул ограничивает
+    только ожидание соединения (`acquireTimeout`), сам запрос на полуоткрытом TCP может висеть
+    долго. Для обработчиков команд Telegram это больше не смертельно — их отпускает дедлайн
+    (итерация 12c), — но команда, упёршаяся в такой запрос, молча не ответит. Лечится `queryTimeout`
+    в конфиге пула; не сделано, пока нет ни одного случая в логах.
 25. **`main.ts` читается плохо: шесть разных тем в одной функции** (разобрано 2026-08-07, брать
     после функционала Telegram). 357 строк, из них `main()` — 266. По объёму: сборка подписок
     на уведомления ~90 строк, пересинк списка опроса ~55, создание объектов ~25, shutdown ~25,
