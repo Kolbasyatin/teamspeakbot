@@ -173,6 +173,12 @@ export class SubscriptionRepository {
         );
     }
 
+    //Отписать чат от всего. Нужна при отзыве права подписываться: без неё уведомления продолжали бы
+    //приходить, хотя управлять подписками чат уже не может. Типы уведомлений уходят каскадом.
+    public async unsubscribeAll(chatId: number): Promise<void> {
+        await this.pool.query("DELETE FROM server_subscriptions WHERE chat_id = ?", [chatId]);
+    }
+
     //«На что подписан этот чат». Только идентификаторы: сами серверы читает ServerRepository,
     //и склеивать две выдачи в один запрос значило бы дублировать здесь его отбор.
     public async findSubscribedServerIds(chatId: number): Promise<number[]> {

@@ -571,12 +571,26 @@ function renderCheatWarning(profile: SteamProfile, now: Date): string[] {
         const dates = vac ? "" : dated;
 
         lines.push(`⚠️ <b>Бан от разработчика игры</b> (${games}${dates})`);
-        lines.push("<i>Причину Valve не раскрывает. Чаще всего это читы, но бывает и другое.</i>");
+        //Наблюдение 24.09.2026: у игрока с пометкой Global ban в Reforger пришёл ровно такой
+        //бан, выданный в тот же день. То есть Bohemia пользуется механизмом Valve, и для нашей
+        //игры это чаще всего именно глобальный бан. Но какую игру имела в виду Valve, она
+        //по-прежнему не сообщает, поэтому утверждение остаётся вероятным, а не точным.
+        lines.push("<i>Похоже на глобальный бан Bohemia: Reforger выдаёт их так же. Игру Valve не называет.</i>");
     }
 
+    //Состояние по VAC называется ВСЕГДА, когда оно известно. Иначе его отсутствие приходится
+    //выводить из молчания, а молчание одинаково выглядит и при «чисто», и при «мы не собрали».
+    lines.push(renderBanSummary(profile));
     lines.push("");
 
     return lines;
+}
+
+function renderBanSummary(profile: SteamProfile): string {
+    const vac = profile.vacBanned === true ? `есть (${profile.vacBanCount ?? 1})` : "нет";
+    const games = profile.gameBanCount ?? 0;
+
+    return `Баны: VAC — ${vac}, от разработчика — ${games === 0 ? "нет" : games}`;
 }
 
 //Дата последнего бана из «сколько дней назад». Точность до суток — большего Valve не даёт,

@@ -1,4 +1,4 @@
-import type {Bot, Context} from "grammy";
+import type {Composer, Context} from "grammy";
 import type {BotCommand} from "grammy/types";
 import type {Logger} from "pino";
 import {
@@ -97,7 +97,7 @@ export class PlayerCommands implements BotCommands {
     ) {
     }
 
-    public register(bot: Bot): void {
+    public register(bot: Composer<Context>): void {
         bot.command("watch", async ctx => {
             await this.rememberChat(ctx);
             await this.watch(ctx, argumentOf(ctx));
@@ -157,8 +157,7 @@ export class PlayerCommands implements BotCommands {
             await this.showObservedServers(ctx);
         });
 
-        //Кнопка выбора игрока из результатов поиска. Регистрируется здесь же, до общего
-        //обработчика «кнопка устарела» из SubscriptionCommands: порядок регистрации в grammy значим.
+        //Кнопка выбора игрока из результатов поиска.
         bot.callbackQuery(PLAYER_PICK_PATTERN, ctx => this.pickPlayer(ctx));
         bot.callbackQuery(PLAYER_WAIT_PATTERN, ctx => this.waitByButton(ctx));
         bot.callbackQuery(PLAYER_INFO_PATTERN, ctx => this.dossierByButton(ctx));
@@ -184,7 +183,7 @@ export class PlayerCommands implements BotCommands {
 
     private async watch(ctx: Context, argument: string): Promise<void> {
         if (argument === "") {
-            await ctx.reply(HELP_TEXT, {parse_mode: "HTML"});
+            await ctx.reply(HELP_TEXT, replyOptions(ctx));
             return;
         }
 
@@ -214,14 +213,14 @@ export class PlayerCommands implements BotCommands {
         const {text, keyboard} = renderSearchResults(
             found.players, found.fuzzy, this.now(), argument, "watch", await this.subscribedIds(ctx));
 
-        await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
+        await ctx.reply(text, replyOptions(ctx, {reply_markup: keyboard}));
     }
 
     //Человек сам называет ник, которого мы не видели. Поиск здесь не делается: он уже был сделан
     //(иначе откуда бы взялась кнопка), а «ждать» — осознанное решение, а не догадка.
     private async wait(ctx: Context, nickname: string): Promise<void> {
         if (nickname === "") {
-            await ctx.reply("Какой ник ждать? /wait &lt;ник&gt;", {parse_mode: "HTML"});
+            await ctx.reply("Какой ник ждать? /wait &lt;ник&gt;", replyOptions(ctx));
             return;
         }
 
@@ -247,7 +246,7 @@ export class PlayerCommands implements BotCommands {
         const chatId = ctx.chatId ?? 0;
 
         if (argument === "") {
-            await ctx.reply("Кого перестать отслеживать? /unwatch &lt;ник или id&gt;", {parse_mode: "HTML"});
+            await ctx.reply("Кого перестать отслеживать? /unwatch &lt;ник или id&gt;", replyOptions(ctx));
             return;
         }
 
@@ -260,7 +259,7 @@ export class PlayerCommands implements BotCommands {
 
         if (stored !== undefined) {
             await this.subscriptions.removePending(chatId, stored);
-            await ctx.reply(`Больше не жду игрока «${stored}».`);
+            await ctx.reply(`Больше не жду игрока «${stored}».`, replyOptions(ctx));
             return;
         }
 
@@ -271,7 +270,7 @@ export class PlayerCommands implements BotCommands {
         }
 
         await this.subscriptions.unsubscribe(chatId, player.playerId);
-        await ctx.reply(`Больше не слежу за «${player.currentNickname}».`);
+        await ctx.reply(`Больше не слежу за «${player.currentNickname}».`, replyOptions(ctx));
     }
 
     private async showSubscriptions(ctx: Context): Promise<void> {
@@ -282,7 +281,7 @@ export class PlayerCommands implements BotCommands {
         if (ids.length === 0) {
             const empty = renderSubscriptions([], pending, this.now());
 
-            await ctx.reply(empty.text, {parse_mode: "HTML", reply_markup: empty.keyboard});
+            await ctx.reply(empty.text, replyOptions(ctx, {reply_markup: empty.keyboard}));
             return;
         }
 
@@ -294,12 +293,12 @@ export class PlayerCommands implements BotCommands {
 
         const {text, keyboard} = renderSubscriptions(players, pending, this.now());
 
-        await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
+        await ctx.reply(text, replyOptions(ctx, {reply_markup: keyboard}));
     }
 
     private async where(ctx: Context, argument: string): Promise<void> {
         if (argument === "") {
-            await ctx.reply("Кого искать? /where &lt;ник&gt;", {parse_mode: "HTML"});
+            await ctx.reply("Кого искать? /where &lt;ник&gt;", replyOptions(ctx));
             return;
         }
 
@@ -313,12 +312,12 @@ export class PlayerCommands implements BotCommands {
             .includes(player.playerId);
         const {text, keyboard} = renderPlayerCard(player, subscribed, this.now());
 
-        await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
+        await ctx.reply(text, replyOptions(ctx, {reply_markup: keyboard}));
     }
 
     private async history(ctx: Context, argument: string): Promise<void> {
         if (argument === "") {
-            await ctx.reply("Чью историю показать? /history &lt;ник&gt;", {parse_mode: "HTML"});
+            await ctx.reply("Чью историю показать? /history &lt;ник&gt;", replyOptions(ctx));
             return;
         }
 
@@ -334,7 +333,7 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        await ctx.reply(renderSessions(player, sessions, this.now()), {parse_mode: "HTML"});
+        await ctx.reply(renderSessions(player, sessions, this.now()), replyOptions(ctx));
     }
 
     //В отличие от остальных команд по нику, здесь НЕ используется resolveOne: он на нескольких
@@ -343,7 +342,7 @@ export class PlayerCommands implements BotCommands {
     //тогда видны рядом, и по списку ников понятно, кто из них нужен.
     private async aliases(ctx: Context, argument: string): Promise<void> {
         if (argument === "") {
-            await ctx.reply("Чьи ники показать? /aliases &lt;ник&gt;", {parse_mode: "HTML"});
+            await ctx.reply("Чьи ники показать? /aliases &lt;ник&gt;", replyOptions(ctx));
             return;
         }
 
@@ -355,12 +354,12 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        await ctx.reply(renderAliases(found.players, found.fuzzy, argument, this.now()), {parse_mode: "HTML"});
+        await ctx.reply(renderAliases(found.players, found.fuzzy, argument, this.now()), replyOptions(ctx));
     }
 
     private async playerInfo(ctx: Context, argument: string): Promise<void> {
         if (argument === "") {
-            await ctx.reply("На кого посмотреть? /playerinfo &lt;ник&gt;", {parse_mode: "HTML"});
+            await ctx.reply("На кого посмотреть? /playerinfo &lt;ник&gt;", replyOptions(ctx));
             return;
         }
 
@@ -390,7 +389,7 @@ export class PlayerCommands implements BotCommands {
         const player = await this.withObserver(ctx, () => this.observer.player(playerId));
 
         if (!player) {
-            await ctx.reply("Игрок больше не известен наблюдателю.");
+            await ctx.reply("Игрок больше не известен наблюдателю.", replyOptions(ctx));
             return;
         }
 
@@ -409,7 +408,7 @@ export class PlayerCommands implements BotCommands {
             .includes(player.playerId);
         const {text, keyboard} = renderPlayerCard(player, subscribed, this.now());
 
-        await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
+        await ctx.reply(text, replyOptions(ctx, {reply_markup: keyboard}));
     }
 
     //Выбор из списка тёзок для /history.
@@ -426,7 +425,7 @@ export class PlayerCommands implements BotCommands {
             return;
         }
 
-        await ctx.reply(renderSessions(player, sessions, this.now()), {parse_mode: "HTML"});
+        await ctx.reply(renderSessions(player, sessions, this.now()), replyOptions(ctx));
     }
 
     //Общее начало всех кнопок выбора: подтвердить нажатие и достать игрока по id.
@@ -448,7 +447,7 @@ export class PlayerCommands implements BotCommands {
         }
 
         if (!player) {
-            await ctx.reply("Этого игрока больше нет в наблюдении.");
+            await ctx.reply("Этого игрока больше нет в наблюдении.", replyOptions(ctx));
             return undefined;
         }
 
@@ -457,7 +456,7 @@ export class PlayerCommands implements BotCommands {
 
     private async steamInfo(ctx: Context, argument: string): Promise<void> {
         if (argument === "") {
-            await ctx.reply("Чей аккаунт посмотреть? /steaminfo &lt;SteamID64&gt;", {parse_mode: "HTML"});
+            await ctx.reply("Чей аккаунт посмотреть? /steaminfo &lt;SteamID64&gt;", replyOptions(ctx));
             return;
         }
 
@@ -471,11 +470,11 @@ export class PlayerCommands implements BotCommands {
         //(ссылка на профиль, короткое имя аккаунта) требует отдельного разрешения имени,
         //которого у нас нет.
         if (dossier === null) {
-            await ctx.reply("SteamID64 — это 17 цифр, например 76561198884181842.");
+            await ctx.reply("SteamID64 — это 17 цифр, например 76561198884181842.", replyOptions(ctx));
             return;
         }
 
-        await ctx.reply(renderDossier(dossier, this.now()), {parse_mode: "HTML"});
+        await ctx.reply(renderDossier(dossier, this.now()), replyOptions(ctx));
     }
 
     private async sendDossier(ctx: Context, player: ObservedPlayer): Promise<void> {
@@ -490,11 +489,12 @@ export class PlayerCommands implements BotCommands {
         if (dossier === null) {
             await ctx.reply(
                 `У «${player.currentNickname}» не видели Steam-аккаунта — возможно, он играет с консоли.`,
+                replyOptions(ctx),
             );
             return;
         }
 
-        await ctx.reply(renderDossier(dossier, this.now(), player), {parse_mode: "HTML"});
+        await ctx.reply(renderDossier(dossier, this.now(), player), replyOptions(ctx));
     }
 
     private async showObservedServers(ctx: Context): Promise<void> {
@@ -505,7 +505,7 @@ export class PlayerCommands implements BotCommands {
         }
 
         if (servers.length === 0) {
-            await ctx.reply("Сейчас не наблюдается ни один сервер.");
+            await ctx.reply("Сейчас не наблюдается ни один сервер.", replyOptions(ctx));
             return;
         }
 
@@ -520,7 +520,7 @@ export class PlayerCommands implements BotCommands {
             lines.push(`• ${server.name} — ${players}/${limit}${queue}`);
         }
 
-        await ctx.reply(lines.join("\n"));
+        await ctx.reply(lines.join("\n"), replyOptions(ctx));
     }
 
     //Нажали кнопку выбора игрока. Кнопка одна и переключающая: подписан — отписываемся, нет —
@@ -546,7 +546,7 @@ export class PlayerCommands implements BotCommands {
         }
 
         if (!player) {
-            await ctx.reply("Этого игрока больше нет в наблюдении.");
+            await ctx.reply("Этого игрока больше нет в наблюдении.", replyOptions(ctx));
             return;
         }
 
@@ -554,7 +554,7 @@ export class PlayerCommands implements BotCommands {
 
         if (subscribed) {
             await this.subscriptions.unsubscribe(chatId, playerId);
-            await ctx.reply(`Больше не слежу за «${player.currentNickname}».`);
+            await ctx.reply(`Больше не слежу за «${player.currentNickname}».`, replyOptions(ctx));
             return;
         }
 
@@ -566,7 +566,7 @@ export class PlayerCommands implements BotCommands {
 
         const {text} = renderPlayerCard(player, true, this.now());
 
-        await ctx.reply(`Слежу за игроком.\n\n${text}`, {parse_mode: "HTML"});
+        await ctx.reply(`Слежу за игроком.\n\n${text}`, replyOptions(ctx));
     }
 
     //Ничего не нашлось: предлагаем запомнить ник. Лимит — чтобы один чат не превратил
@@ -578,6 +578,7 @@ export class PlayerCommands implements BotCommands {
             await ctx.reply(
                 `Такого игрока мы не видели, а список ожидания уже полон (${this.properties.pendingLimit}). `
                 + "Снимите лишнее через /unwatch.",
+                replyOptions(ctx),
             );
             return;
         }
@@ -592,13 +593,14 @@ export class PlayerCommands implements BotCommands {
                 "",
                 `Жду ${days} дн., снять — /unwatch ${nickname}. Мои ожидания видно в /players.`,
             ].join("\n"),
+            replyOptions(ctx),
         );
     }
 
     //Поиск с общей обработкой отказа соседа: команды не должны падать из-за него.
     private async find(ctx: Context, nickname: string): Promise<{players: ObservedPlayer[]; fuzzy: boolean} | undefined> {
         if (nickname.length < MIN_NICKNAME_LENGTH && !isNumeric(nickname)) {
-            await ctx.reply("Ник для поиска — минимум два символа.");
+            await ctx.reply("Ник для поиска — минимум два символа.", replyOptions(ctx));
             return undefined;
         }
 
@@ -631,6 +633,7 @@ export class PlayerCommands implements BotCommands {
         if (found.players.length === 0) {
             await ctx.reply(
                 `Игрока «${argument}» мы не видели. Возможно, он играет на серверах вне наблюдения — /observed.`,
+                replyOptions(ctx),
             );
             return undefined;
         }
@@ -644,7 +647,7 @@ export class PlayerCommands implements BotCommands {
             const note = renderMatchNote(single, argument);
 
             if (note !== undefined) {
-                await ctx.reply(note, {parse_mode: "HTML"});
+                await ctx.reply(note, replyOptions(ctx));
             }
 
             return single;
@@ -653,7 +656,7 @@ export class PlayerCommands implements BotCommands {
         const {text, keyboard} = renderSearchResults(
             found.players, found.fuzzy, this.now(), argument, intent, await this.subscribedIds(ctx));
 
-        await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
+        await ctx.reply(text, replyOptions(ctx, {reply_markup: keyboard}));
 
         return undefined;
     }
@@ -670,7 +673,7 @@ export class PlayerCommands implements BotCommands {
         const ids = await this.subscriptions.findSubscribedPlayerIds(chatId);
 
         if (ids.length === 0) {
-            await ctx.reply("Вы ни за кем не следите.");
+            await ctx.reply("Вы ни за кем не следите.", replyOptions(ctx));
             return undefined;
         }
 
@@ -693,13 +696,13 @@ export class PlayerCommands implements BotCommands {
         }
 
         if (matched.length === 0) {
-            await ctx.reply(`Среди ваших подписок нет «${argument}». Посмотреть список — /players.`);
+            await ctx.reply(`Среди ваших подписок нет «${argument}». Посмотреть список — /players.`, replyOptions(ctx));
             return undefined;
         }
 
         const {text, keyboard} = renderSearchResults(matched, false, this.now(), "", "watch");
 
-        await ctx.reply(text, {parse_mode: "HTML", reply_markup: keyboard});
+        await ctx.reply(text, replyOptions(ctx, {reply_markup: keyboard}));
 
         return undefined;
     }
@@ -712,7 +715,7 @@ export class PlayerCommands implements BotCommands {
         } catch (error) {
             if (error instanceof PlayerObserverUnavailable) {
                 this.logger.warn({error: error.message}, "Наблюдатель за игроками недоступен");
-                await ctx.reply("Сервис наблюдения за игроками сейчас недоступен, попробуйте позже.");
+                await ctx.reply("Сервис наблюдения за игроками сейчас недоступен, попробуйте позже.", replyOptions(ctx));
                 return undefined;
             }
 
@@ -737,6 +740,28 @@ export class PlayerCommands implements BotCommands {
 
 //Аргумент команды: всё после «/watch». grammy кладёт его в ctx.match, но там строка с пробелами
 //по краям и без гарантии типа.
+//Ответ, привязанный к вызвавшей его команде.
+//
+//Зачем. Досье собирается синхронно и может идти двадцать секунд, а бот отвечает обычным
+//сообщением, ничем не связанным с вопросом. Стоит отправить вторую команду, не дождавшись
+//первой, — и ответы приходят не в том порядке, в каком заданы вопросы. Дважды это выглядело
+//как «спросил про одного игрока, показали другого», хотя каждый ответ был верен своему вопросу.
+//
+//Цитата снимает вопрос целиком: Telegram рисует над ответом ту самую команду.
+//Если исходное сообщение уже удалено, Telegram отказал бы всему ответу — allow_sending_without_reply
+//разрешает отправить его без цитаты.
+function replyOptions(ctx: Context, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    const messageId = ctx.msg?.message_id;
+
+    return messageId === undefined
+        ? {parse_mode: "HTML", ...extra}
+        : {
+            parse_mode: "HTML",
+            reply_parameters: {message_id: messageId, allow_sending_without_reply: true},
+            ...extra,
+        };
+}
+
 function argumentOf(ctx: Context): string {
     const match = ctx.match;
 

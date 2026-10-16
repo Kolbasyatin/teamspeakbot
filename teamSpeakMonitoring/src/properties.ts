@@ -32,6 +32,31 @@ convict.addFormat({
     },
 });
 
+//chat_id через запятую. Знаковые: у групп id отрицательные. Опечатка роняет старт, а не молча
+//оставляет бота без root — заметить такое иначе было бы нечем.
+convict.addFormat({
+    name: "comma-separated-chat-ids",
+    validate: (value: unknown): void => {
+        if (!Array.isArray(value) || !value.every(item => Number.isSafeInteger(item))) {
+            throw new Error("must be a comma-separated list of integer chat ids");
+        }
+    },
+    coerce: (value: unknown): number[] => {
+        if (Array.isArray(value)) {
+            return value;
+        }
+
+        if (typeof value !== "string") {
+            return [];
+        }
+
+        return value
+            .split(",")
+            .map(item => item.trim())
+            .filter(Boolean)
+            .map(item => /^-?\d+$/.test(item) ? Number(item) : Number.NaN);
+    },
+});
 
 export interface TeamSpeakProperties {
     host: string;
@@ -71,6 +96,7 @@ export interface TGProperties {
     token: string;
     channelId: string;
     updateTimeoutMs: number;
+    rootChatIds: number[];
 }
 
 export interface MonitorProperties {
@@ -365,6 +391,12 @@ const tgConfig = convict<TGProperties>({
         format: "nat",
         default: 60_000,
         env: "TELEGRAM_UPDATE_TIMEOUT_MS",
+    },
+    rootChatIds: {
+        doc: "Chat ids that always have ROLE_ROOT, comma-separated (rbac.md)",
+        format: "comma-separated-chat-ids",
+        default: [],
+        env: "TELEGRAM_ROOT_CHAT_IDS",
     },
 });
 

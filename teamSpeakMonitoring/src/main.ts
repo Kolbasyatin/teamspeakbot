@@ -9,6 +9,8 @@ import {AdminServer} from "./admin/AdminServer.js";
 import {ServerRepository} from "./persistence/ServerRepository.js";
 import {SubscriptionRepository} from "./persistence/SubscriptionRepository.js";
 import {PlayerSubscriptionRepository} from "./persistence/PlayerSubscriptionRepository.js";
+import {RoleRepository} from "./persistence/RoleRepository.js";
+import {AccessControl} from "./access/AccessControl.js";
 import {createPool} from "mariadb";
 import {
     dbConfig,
@@ -41,6 +43,8 @@ import {ChannelDescriptionRenderer} from "./teamspeak/ChannelDescriptionRenderer
 import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TeamSpeakCommands} from "./telegram/TeamSpeakCommands.js";
 import {SubscriptionCommands} from "./telegram/SubscriptionCommands.js";
+import {AccessCommands, type ChatMenus} from "./telegram/AccessCommands.js";
+import {createAccessGuard} from "./telegram/AccessGuard.js";
 import {buildPlayerFeature, type ChatSender} from "./players/buildPlayerFeature.js";
 import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
@@ -115,6 +119,24 @@ async function main(): Promise<any> {
     const serverRepository = new ServerRepository(pool);
     const subscriptionRepository = new SubscriptionRepository(pool);
     const playerSubscriptionRepository = new PlayerSubscriptionRepository(pool);
+    //Права на команды бота (rbac.md). Root — из конфига, назначения — из базы, состав ролей — в коде.
+    //Потерянное право забирает с собой то, чем чат пользовался по нему: подписки остались бы
+    //и продолжали слать уведомления тому, кто управлять ими уже не может.
+    const access = new AccessControl(
+        new RoleRepository(pool),
+        new Set(tgProperties.rootChatIds),
+        async (chatId, lost) => {
+            if (lost.has("ROLE_PLAYER_WATCH")) {
+                await playerSubscriptionRepository.removeAllForChat(chatId);
+            }
+
+            if (lost.has("ROLE_SERVER_SUBSCRIBE")) {
+                await subscriptionRepository.unsubscribeAll(chatId);
+                await syncMonitorServersFromRepository();
+            }
+        },
+        log.child({component: "access"}),
+    );
     const adminWebServer = new AdminServer({
         port: syncConfig.port
     })
@@ -152,16 +174,29 @@ async function main(): Promise<any> {
     if (!playerFeature) {
         log.info("PLAYERS_API_URL или PLAYERS_API_TOKEN пуст — команды и уведомления про игроков отключены");
     }
+    //Меню по правам строит бот, а нужно оно командам доступа, которые собираются раньше бота.
+    //Кольцо разрывается так же, как у chatSender: вызывается заведомо после сборки.
+    const chatMenus: ChatMenus = {
+        menuFor: permissions => telegramBot?.menuFor(permissions) ?? [],
+        publishChatMenu: async (chatId, permissions) => {
+            await telegramBot?.publishChatMenu(chatId, permissions);
+        },
+    };
+    const accessCommands = new AccessCommands(access, subscriptionRepository, chatMenus, log.child({component: "access"}));
+
+    if (tgProperties.rootChatIds.length === 0) {
+        log.warn("TELEGRAM_ROOT_CHAT_IDS пуст — раздавать права некому, команды про игроков недоступны никому");
+    }
+
     //Наборы команд перечислены здесь, потому что зависимости у них разные и живут они здесь же.
     //Сами команды не зависят от TELEGRAM_NOTIFIER: тот флаг управляет только уведомлениями.
+    //Все наборы бот ставит за одного стража прав: команда или кнопка, которой нет в карте
+    //(telegram/commandAccess.ts), не дойдёт ни до какого обработчика.
     //let, а не const: на него ссылается chatSender выше — см. комментарий там.
     let telegramBot: TelegramBot | undefined = telegramApi
         ? new TelegramBot(telegramApi, [
+            accessCommands,
             new TeamSpeakCommands(teamSpeakClient),
-            //ПОРЯДОК ЗНАЧИМ. Набор про игроков идёт ДО подписок на серверы: у тех последним
-            //зарегистрирован перехватчик всех неразобранных нажатий («кнопка устарела»),
-            //а grammy отдаёт апдейт первому подходящему обработчику. Окажись он раньше —
-            //кнопки выбора игрока не доходили бы до своего обработчика вовсе.
             ...(playerFeature ? [playerFeature.commands] : []),
             new SubscriptionCommands(serverRepository, subscriptionRepository, {
                 getSnapshot: () => monitor.getSnapshot(),
@@ -172,7 +207,8 @@ async function main(): Promise<any> {
                 });
             }),
         //child с меткой: строки Telegram отбираются из общего лога одним фильтром (component=telegram).
-        ], log.child({component: "telegram"}), tgProperties.updateTimeoutMs)
+        ], createAccessGuard(access, log.child({component: "access"})),
+        log.child({component: "telegram"}), tgProperties.updateTimeoutMs)
         : undefined;
 
     if (!telegramApi) {
@@ -457,6 +493,12 @@ async function main(): Promise<any> {
     //догонится само.
     playerScheduler.start();
     telegramBot?.start();
+    //Персональные меню — после запуска: это сетевые вызовы, и от них ничего не зависит.
+    if (telegramBot) {
+        void accessCommands.publishMenus().catch(error => {
+            log.warn({error}, "Не удалось опубликовать персональные меню команд");
+        });
+    }
 }
 
 try {

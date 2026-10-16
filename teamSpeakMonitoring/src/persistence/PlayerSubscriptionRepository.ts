@@ -58,6 +58,14 @@ export class PlayerSubscriptionRepository {
         );
     }
 
+    //Всё, что чат ждёт и за кем следит, — разом. Нужна при отзыве права следить за игроками:
+    //иначе подписки остались бы, и входы-выходы продолжали бы приходить тому, кому их больше
+    //не положено. Ожидания уходят вместе с подписками: найдись ник позже, он стал бы подпиской.
+    public async removeAllForChat(chatId: number): Promise<void> {
+        await this.pool.query("DELETE FROM player_subscriptions WHERE chat_id = ?", [chatId]);
+        await this.pool.query("DELETE FROM pending_player_subscriptions WHERE chat_id = ?", [chatId]);
+    }
+
     public async findSubscribedPlayerIds(chatId: number): Promise<number[]> {
         const rows = await this.pool.query<PlayerIdRow[]>(
             `

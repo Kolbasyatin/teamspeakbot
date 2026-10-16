@@ -1,4 +1,4 @@
-import type {Bot} from "grammy";
+import type {Composer, Context} from "grammy";
 import type {BotCommand} from "grammy/types";
 import {log} from "../logger.js";
 import type {BotCommands} from "./TelegramBot.js";
@@ -19,7 +19,7 @@ export class TeamSpeakCommands implements BotCommands {
     ) {
     }
 
-    public register(bot: Bot): void {
+    public register(bot: Composer<Context>): void {
         bot.command("who", async ctx => {
             await ctx.reply(await this.showWho());
         });

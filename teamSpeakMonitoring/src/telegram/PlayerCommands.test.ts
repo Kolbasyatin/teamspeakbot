@@ -98,3 +98,53 @@ test("чужие кнопки этим набором не перехватыв�
         assert.ok(!handled(callbackTriggers, foreign), `не должен ловить ${foreign}`);
     }
 });
+
+//Ответы обязаны цитировать свою команду. Иначе при медленном ответе (досье собирается
+//синхронно и может идти двадцать секунд) порядок в чате расходится с порядком вопросов,
+//и человек уверенно читает ответ про одного игрока как ответ про другого. Так было дважды.
+test("ответ команды привязан к вызвавшему сообщению", async () => {
+    const handlers = new Map<string, (ctx: unknown) => Promise<void>>();
+
+    const bot = {
+        command: (name: string, handler: (ctx: unknown) => Promise<void>): void => {
+            handlers.set(Array.isArray(name) ? String(name[0]) : name, handler);
+        },
+        callbackQuery: (): void => {},
+    } as unknown as Bot;
+
+    const observer = {
+        //Никого не нашли — команда отвечает текстом, и он тоже обязан быть привязан.
+        searchPlayers: async () => ({players: [], fuzzy: false}),
+    } as unknown as PlayerObserver;
+
+    const commands = new PlayerCommands(
+        observer,
+        {findSubscribedPlayerIds: async () => []} as unknown as PlayerSubscriptionStore,
+        {saveChat: async () => {}} as unknown as ChatRegistry,
+        {pendingTtlMs: 1_000, pendingLimit: 5},
+        silentLogger,
+        () => new Date(),
+    );
+
+    commands.register(bot);
+
+    const sent: Record<string, unknown>[] = [];
+    const ctx = {
+        match: "БЛИНК148",
+        chatId: 42,
+        msg: {message_id: 777},
+        chat: {id: 42, type: "private"},
+        from: {id: 1, is_bot: false, first_name: "tester"},
+        reply: async (_text: string, options: Record<string, unknown>) => {
+            sent.push(options);
+        },
+    };
+
+    const playerInfo = handlers.get("playerinfo");
+
+    assert.ok(playerInfo, "команда /playerinfo зарегистрирована");
+    await playerInfo(ctx);
+
+    assert.equal(sent.length, 1, "команда ответила один раз");
+    assert.deepEqual(sent[0]?.reply_parameters, {message_id: 777, allow_sending_without_reply: true});
+});

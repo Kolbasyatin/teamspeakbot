@@ -1,4 +1,4 @@
-import type {Bot, Context, InlineKeyboard} from "grammy";
+import type {Composer, Context, InlineKeyboard} from "grammy";
 import type {BotCommand, Chat} from "grammy/types";
 import type {CatalogServer} from "../catalog/CatalogServer.js";
 import type {ServerProbeSnapshot} from "../monitoring/ServerProbe.js";
@@ -66,16 +66,6 @@ export interface StatusSource {
     checkServer(serverId: number): Promise<ServerPollResult | undefined>;
 }
 
-const START_TEXT = [
-    "Слежу за игровыми серверами и пишу, когда они падают и поднимаются.",
-    "",
-    "/serverlist — каталог серверов, выбрать за какими следить",
-    "/serverlist arma — то же самое с поиском по названию",
-    "/my — мои подписки и настройка уведомлений по каждому серверу",
-    "/status — что сейчас с моими серверами",
-    "/time — то же самое",
-].join("\n");
-
 //Команды подписок. Отдельно от TelegramBot намеренно: тот показывает состояние (/time, /who),
 //этот меняет данные и требует совсем других зависимостей. Один Bot на двоих — регистрируют
 //обработчики оба, как и раньше.
@@ -139,16 +129,12 @@ export class SubscriptionCommands implements BotCommands {
             {command: "serverlist", description: "каталог серверов"},
             {command: "my", description: "мои подписки и настройки уведомлений"},
             {command: "status", description: "что сейчас с моими серверами"},
-            {command: "start", description: "что умеет бот"},
         ];
     }
 
-    public register(bot: Bot): void {
-        bot.command("start", async ctx => {
-            await this.rememberChat(ctx);
-            await ctx.reply(START_TEXT);
-        });
-
+    ///start здесь больше нет: он выдаёт роль по умолчанию и рассказывает о командах по правам
+    //чата, это работа AccessCommands.
+    public register(bot: Composer<Context>): void {
         bot.command("serverlist", async ctx => {
             await this.rememberChat(ctx);
             await this.replyWithList(ctx, "catalog", 0, sanitizeSearch(ctx.match));
@@ -170,12 +156,12 @@ export class SubscriptionCommands implements BotCommands {
         });
 
         //Кнопки разводятся маршрутизацией grammy, а не цепочкой if внутри одного обработчика:
-        //новая кнопка — новая строка регистрации, а не новая ветка. Порядок значим — последний
-        //обработчик ловит всё, что не подошло предыдущим.
+        //новая кнопка — новая строка регистрации, а не новая ветка.
+        //Перехватчика «кнопка устарела» для незнакомых данных здесь больше нет: незнакомую кнопку
+        //останавливает страж прав (AccessGuard) и сам отвечает на нажатие.
         bot.callbackQuery(STATUS_REFRESH, ctx => this.refreshStatus(ctx));
         bot.callbackQuery(LIST_ACTION_PATTERN, ctx => this.applyListAction(ctx));
         bot.callbackQuery(CARD_ACTION_PATTERN, ctx => this.applyCardAction(ctx));
-        bot.on("callback_query:data", ctx => this.answerOutdated(ctx));
     }
 
     private async refreshStatus(ctx: Context): Promise<void> {

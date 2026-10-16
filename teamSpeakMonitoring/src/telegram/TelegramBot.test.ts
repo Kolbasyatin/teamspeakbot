@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type {Bot, Transformer} from "grammy";
+import type {Bot, Context, Middleware, MiddlewareFn, Transformer} from "grammy";
 import type {Logger} from "pino";
 import {TelegramBot, type BotCommands} from "./TelegramBot.js";
 
 const silentLogger = {debug: () => {}, info: () => {}, warn: () => {}, error: () => {}} as unknown as Logger;
+const passGuard: MiddlewareFn<Context> = async (_ctx, next) => next();
 
 //Настоящий Bot здесь не нужен: проверяется только то, что владелец раздаёт его всем наборам
 //и вешает обработчик ошибок. Сеть, long polling и api не участвуют.
@@ -39,14 +40,14 @@ test("каждому набору команд отдаётся бот", () => {
     new TelegramBot(createBotStub(), [
         createCommands("status", registered),
         createCommands("subscriptions", registered),
-    ], silentLogger, 60_000);
+    ], passGuard, silentLogger, 60_000);
 
     assert.deepEqual(registered, ["status", "subscriptions"]);
 });
 
 test("пустой список наборов — не ошибка", () => {
     //Бот без команд остаётся рабочим: уведомления идут через sender и long polling им не нужен.
-    const bot = new TelegramBot(createBotStub(), [], silentLogger, 60_000);
+    const bot = new TelegramBot(createBotStub(), [], passGuard, silentLogger, 60_000);
 
     assert.ok(bot.sender);
 });
@@ -56,7 +57,7 @@ test("меню собирается из всех наборов", () => {
     const bot = new TelegramBot(createBotStub(), [
         createCommands("status", []),
         createCommands("subscriptions", []),
-    ], silentLogger, 60_000);
+    ], passGuard, silentLogger, 60_000);
 
     assert.deepEqual(bot.describeMenu().map(item => item.command), ["status", "subscriptions"]);
 });
@@ -66,7 +67,7 @@ test("обработчик ошибок вешается всегда", () => {
     //до перезапуска процесса.
     const stub = createBotStub();
 
-    new TelegramBot(stub, [], silentLogger, 60_000);
+    new TelegramBot(stub, [], passGuard, silentLogger, 60_000);
 
     assert.equal(stub.caught, true);
 });
@@ -88,7 +89,7 @@ test("превью ссылок выключено для всего исход�
         use: (): void => undefined,
     } as unknown as Bot;
 
-    new TelegramBot(bot, [], silentLogger, 60_000);
+    new TelegramBot(bot, [], passGuard, silentLogger, 60_000);
 
     assert.equal(transformers.length, 2, "трансформеры должны ставиться в конструкторе");
 
@@ -120,4 +121,56 @@ test("превью ссылок выключено для всего исход�
     );
 
     assert.deepEqual(calls[3]?.payload["link_preview_options"], {is_disabled: false});
+});
+
+test("наборы команд регистрируются за стражем, а не на самом боте", async () => {
+    //Главное требование rbac.md: внутрь попадает только то, что страж пропустил. Проверяется
+    //поведением: страж молчит — обработчик набора не вызывается.
+    const used: Middleware<Context>[] = [];
+    const bot = {
+        api: {config: {use: (): void => undefined}},
+        catch: (): void => undefined,
+        use: (middleware: Middleware<Context>): void => {
+            used.push(middleware);
+        },
+    } as unknown as Bot;
+    let handled = false;
+    const commands: BotCommands = {
+        register: composer => {
+            composer.use(() => {
+                handled = true;
+            });
+        },
+        describe: () => [],
+    };
+    const denyAll: MiddlewareFn<Context> = async () => undefined;
+
+    new TelegramBot(bot, [commands], denyAll, silentLogger, 60_000);
+
+    //Последний middleware бота — Composer со стражем и наборами.
+    const last = used.at(-1);
+
+    assert.ok(last);
+    const guarded = typeof last === "function" ? last : last.middleware();
+
+    await guarded({} as Context, async () => undefined);
+    assert.equal(handled, false, "страж не пропустил — набор не должен был сработать");
+});
+
+test("меню чата строится по его правам", () => {
+    const bot = new TelegramBot(createBotStub(), [{
+        register: (): void => undefined,
+        describe: () => [
+            {command: "serverlist", description: "каталог"},
+            {command: "watch", description: "следить"},
+            //Команды нет в карте прав — не показывается никому, как страж её никому и не пропустит.
+            {command: "unmapped", description: "забыли в карте"},
+        ],
+    }], passGuard, silentLogger, 60_000);
+
+    assert.deepEqual(bot.menuFor(new Set(["ROLE_SERVER_LIST"])).map(item => item.command), ["serverlist"]);
+    assert.deepEqual(
+        bot.menuFor(new Set(["ROLE_SERVER_LIST", "ROLE_PLAYER_WATCH"])).map(item => item.command),
+        ["serverlist", "watch"],
+    );
 });

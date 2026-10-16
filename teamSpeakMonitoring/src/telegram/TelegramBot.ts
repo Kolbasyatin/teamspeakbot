@@ -1,6 +1,8 @@
-import type {Bot, BotError} from "grammy";
+import {Composer, type Bot, type BotError, type Context, type MiddlewareFn} from "grammy";
 import type {BotCommand} from "grammy/types";
 import type {Logger} from "pino";
+import {DEFAULT_PERMISSIONS, type Permission} from "../access/Roles.js";
+import {commandPermission} from "./commandAccess.js";
 import {TelegramSender} from "./TelegramSender.js";
 import {createApiLogger, createUpdateDeadline, createUpdateLogger, PollingWatchdog} from "./TelegramDiagnostics.js";
 
@@ -10,8 +12,11 @@ import {createApiLogger, createUpdateDeadline, createUpdateLogger, PollingWatchd
 //
 //Форма та же, что у уведомлений: NotificationDispatcher владеет доставкой, а список подписок
 //собирается в composition root. Здесь ровно так же — владелец один, список снаружи.
+//
+//Регистрирует набор не на самом боте, а на Composer'е, перед которым стоит страж прав:
+//внутрь попадает только то, что проверку прошло, и забыть проверку в отдельной команде нельзя.
 export interface BotCommands {
-    register(bot: Bot): void;
+    register(bot: Composer<Context>): void;
 
     //Подсказки, которые Telegram показывает при вводе «/». Метод обязательный, а не опциональный,
     //намеренно: новый набор не сможет молча не попасть в меню — компилятор потребует ответ.
@@ -40,7 +45,8 @@ export class TelegramBot {
     private static readonly WATCHDOG_CHECK_MS = 15_000;
 
     //Собирается из наборов, а не пишется отдельным списком: иначе добавленную команду легко
-    //зарегистрировать и забыть показать.
+    //зарегистрировать и забыть показать. Это ПОЛНОЕ меню; каждый чат видит из него то,
+    //на что у него есть права (menuFor).
     private readonly menu: BotCommand[];
 
     //Следит, ходит ли бот за апдейтами. Проверку дёргает таймер, живущий между start() и stop().
@@ -51,6 +57,9 @@ export class TelegramBot {
     constructor(
         private readonly bot: Bot,
         commands: readonly BotCommands[],
+        //Страж прав (AccessGuard). Обязательный параметр, а не «можно поставить потом»:
+        //бот без стража не должен собираться вовсе.
+        guard: MiddlewareFn<Context>,
         private readonly logger: Logger,
         //Потолок на обработку одного апдейта, TELEGRAM_UPDATE_TIMEOUT_MS. См. createUpdateDeadline.
         updateTimeoutMs: number,
@@ -86,9 +95,17 @@ export class TelegramBot {
             return prev(method, {link_preview_options: {is_disabled: true}, ...payload}, signal);
         });
 
+        //Все наборы — за одним стражем. Один, а не по стражу на набор: middleware, не вызвавший
+        //next(), останавливает апдейт целиком, и страж первого набора перекрыл бы все следующие.
+        const guarded = new Composer<Context>();
+
+        guarded.use(guard);
+
         for (const set of commands) {
-            set.register(bot);
+            set.register(guarded);
         }
+
+        bot.use(guarded);
 
         //Обязателен, а не «на всякий случай». Без него ЛЮБАЯ ошибка внутри обработчика для grammy
         //фатальна: она гасит long polling («Stopping bot»), после чего падает и сам getUpdates.
@@ -113,11 +130,12 @@ export class TelegramBot {
         //Меню публикуется здесь, а не в конструкторе: это сетевой вызов, а конструктор должен
         //оставаться дешёвым и безотказным. Отказ не мешает работе — команды продолжат отвечать,
         //просто подсказок при вводе «/» не будет, — поэтому только лог.
-        //Одного вызова хватает на все чаты: область по умолчанию — это запасной вариант для любого
-        //чата, а узкие (all_group_chats, конкретный чат) её только переопределяют. Отдельная
-        //публикация для групп ничего не добавляет; если подсказки не появились сразу, дело
-        //в кэше клиента Telegram, а не в области.
-        void this.bot.api.setMyCommands(this.menu).catch((error: unknown) => {
+        //Область по умолчанию — запасной вариант для любого чата, а узкие (конкретный чат) её только
+        //переопределяют. В неё уходит меню роли по умолчанию: её получает каждый чат при /start,
+        //поэтому персональное меню нужно лишь тем, чьи права от неё отличаются (publishChatMenu).
+        //Незнакомец до /start тоже видит серверные команды — и в ответ на них получает «нажмите
+        ///start»; публиковать меню каждому чату ради этого незачем.
+        void this.bot.api.setMyCommands(this.menuFor(DEFAULT_PERMISSIONS)).catch((error: unknown) => {
             this.logger.error({error}, "Не удалось опубликовать меню команд Telegram");
         });
 
@@ -141,9 +159,36 @@ export class TelegramBot {
         await this.bot.stop();
     }
 
-    //Что уйдёт в setMyCommands. Публично только ради теста: собранное меню — единственное, чего
+    //Полное меню всех наборов. Публично только ради теста: собранное меню — единственное, чего
     //не видно снаружи иначе как сетевым вызовом.
     public describeMenu(): readonly BotCommand[] {
         return this.menu;
     }
+
+    //Что из меню доступно при этих правах. Команда, которой нет в карте прав, не показывается
+    //никому — ровно как страж её никому не пропустит.
+    public menuFor(permissions: ReadonlySet<Permission>): BotCommand[] {
+        return this.menu.filter(item => {
+            const required = commandPermission(item.command);
+
+            return required !== undefined && permissions.has(required);
+        });
+    }
+
+    //Персональное меню чата. Права совпали с умолчанием — персональное снимается, и чат видит
+    //общее: так после отзыва не остаётся меню с командами, которых больше нет.
+    public async publishChatMenu(chatId: number, permissions: ReadonlySet<Permission>): Promise<void> {
+        const scope = {type: "chat", chat_id: chatId} as const;
+
+        if (sameSet(permissions, DEFAULT_PERMISSIONS)) {
+            await this.bot.api.deleteMyCommands({scope});
+            return;
+        }
+
+        await this.bot.api.setMyCommands(this.menuFor(permissions), {scope});
+    }
+}
+
+function sameSet<T>(left: ReadonlySet<T>, right: ReadonlySet<T>): boolean {
+    return left.size === right.size && [...left].every(item => right.has(item));
 }

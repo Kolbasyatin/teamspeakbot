@@ -22,7 +22,10 @@
 8. **следит за игроками** (`/watch`, `/players`, `/where`, `/history`, `/observed`): подписки на вход
    и выход конкретного человека. Данные берутся у соседнего сервиса `armaplayers`
    ([arma-players-backend](https://github.com/kolbasyatin/arma-players-backend)) по REST — своего
-   наблюдения за игроками здесь нет. Пустой `PLAYERS_API_URL` выключает тему целиком.
+   наблюдения за игроками здесь нет. Пустой `PLAYERS_API_URL` выключает тему целиком;
+9. **пускает к командам по правам** (RBAC, [`rbac.md`](rbac.md)): каждая команда и кнопка требует права,
+   права собраны в группы в коде, назначение «чату выдана роль» — в базе, root — из env. По умолчанию
+   всем — серверы и подписки на них; игроки и раздача прав — по выдаче (`/grant`, `/revoke`, `/roles`).
 
 Окружение вокруг приложения (на prod-сервере, в одном compose): MariaDB, TeamSpeak 6 server, `tsbot-monitor`.
 
@@ -53,6 +56,14 @@ teamSpeakMonitoring/         сам сервис
     logger.ts                pino (pino-pretty вне production)
     retry.ts                 повтор с экспоненциальным backoff
     Saiga.ts                 клиент к OpenAI-совместимому API (Ollama). Пока не подключён — см. §9
+
+    access/                ← права на команды бота (RBAC, rbac.md). От Telegram не зависит
+      Roles.ts               права и группы, иерархия (Record — новая группа без состава не
+                             скомпилируется), транзитивное разворачивание при загрузке модуля,
+                             manageRefusal — кто что вправе выдать и отозвать (одно правило на оба)
+      AccessControl.ts       «что можно этому чату»: роли из базы с кэшем + ROLE_ROOT из env,
+                             grant/revoke с проверкой, роль по умолчанию однократно, сообщение
+                             о потерянных правах наружу (PermissionsLostHandler). Здесь же RoleStore
 
     players/               ← наблюдение за игроками: всё общение с соседним сервисом armaplayers
       PlayerObserver.ts      контракт наблюдателя глазами бота (типы + PlayerObserverUnavailable)
@@ -148,8 +159,10 @@ teamSpeakMonitoring/         сам сервис
     telegram/              ← адаптер Telegram
       TelegramBot.ts         единственный владелец всего телеграмного: Bot, наборы команд, sender,
                              меню, start/stop, bot.catch. Здесь же интерфейс BotCommands с двумя
-                             обязательными методами — register(bot) и describe() (подсказки для
+                             обязательными методами — register(composer) и describe() (подсказки для
                              setMyCommands; обязателен, чтобы новый набор не выпал из меню молча).
+                             Наборы регистрируются на Composer за стражем прав — страж обязательный
+                             параметр конструктора. Меню по правам: menuFor, publishChatMenu
                              ВХОДЯЩЕЕ (команды, кнопки) работает только после start() — это запуск
                              long polling; ИСХОДЯЩЕЕ (sender) работает всегда, sendMessage полингу
                              не подчинён. Без bot.catch ошибка в обработчике гасит polling целиком.
@@ -162,6 +175,15 @@ teamSpeakMonitoring/         сам сервис
                              на обработку апдейта (TELEGRAM_UPDATE_TIMEOUT_MS): grammy зовёт
                              следующий getUpdates только после обработчика, и один повисший
                              делал бота глухим до рестарта контейнера
+      AccessGuard.ts         страж прав: ОДИН перед всеми наборами (middleware без next() глушит
+                             апдейт целиком, страж на каждом наборе перекрыл бы следующие). Fail closed:
+                             проходит только команда/кнопка из карты и с правом; прочее отбрасывается
+                             (кнопке — ответ «устарела», чтобы не висел индикатор)
+      commandAccess.ts       карта «команда → право» и «шаблон кнопки → право». Исчерпывающая:
+                             commandAccess.test.ts регистрирует настоящие наборы и падает на любом
+                             расхождении и на обработчике мимо command/callbackQuery
+      AccessCommands.ts      /start (роль по умолчанию однократно + список команд по правам), /help,
+                             /whoami, /grant, /revoke, /roles. Персональные меню на старте
       TeamSpeakCommands.ts   всё, что бот умеет про TeamSpeak: пока только /who; здесь же
                              OnlineNicknamesSource. Раньше назывался StatusCommands и держал
                              ещё /time (уехал синонимом /status — показывал чужие подписки)
@@ -170,7 +192,8 @@ teamSpeakMonitoring/         сам сервис
                              (~30 сообщений/сек) общий на бота, поэтому и очередь будет здесь
       TelegramChat.ts        TelegramChat, TelegramChatType — контракт хранилища для подписчика
                              (по той же причине, что StoredServer лежит в monitoring/)
-      SubscriptionCommands.ts  /start, /serverlist, /my, /status и обработка нажатий. Кнопки
+      SubscriptionCommands.ts  /serverlist, /my, /status и обработка нажатий (/start уехал в AccessCommands,
+                             перехватчик незнакомых кнопок — в стража). Кнопки
                              разводятся регистрацией (bot.callbackQuery по шаблону), а действия
                              внутри — таблицами Record; здесь же ServerCatalog, SubscriptionStore
                              и StatusSource — узкие интерфейсы к зависимостям. У списка два
@@ -205,6 +228,8 @@ teamSpeakMonitoring/         сам сервис
                              серверы, в том числе без подписок (иначе подписаться было бы не на что)
                              findStoredById — один включённый сервер с источниками, без условия
                              на подписку: для разовой проверки по кнопке
+      RoleRepository.ts      назначения ролей (telegram_chat_roles) и пометка однократной выдачи
+                             роли по умолчанию; что роль разрешает, не знает
       SubscriptionRepository.ts  чтение и запись подписок: чаты, подписка/отписка, типы уведомлений
                              и обе стороны связи — «на что подписан чат» и «кто подписан на сервер
                              вот на этот тип»
@@ -328,6 +353,12 @@ teamSpeakMonitoring/         сам сервис
   Каждая операция идёт с потолком `TS_QUERY_TIMEOUT_MS` (итерация 12b): соединение, на котором
   команда не уложилась, выбрасывается — в его очереди застряла команда, и всё, что встанет за ней,
   повиснет тоже.
+- **Права — один страж перед всеми командами** (итерация 13, `rbac.md`). Порядок middleware у бота:
+  диагностика → дедлайн апдейта → `Composer` со стражем и всеми наборами. Страж спрашивает
+  `AccessControl` по `ctx.chatId`; роли кэшируются в памяти и сбрасываются при выдаче и отзыве.
+  Отзыв, после которого чат потерял `ROLE_PLAYER_WATCH` или `ROLE_SERVER_SUBSCRIBE`, удаляет его
+  подписки на игроков или на серверы — это решает обработчик в `main.ts`. Уведомления (рассылка
+  подписчикам) через стража не идут: это исходящее.
 - **Приём команд Telegram — одна очередь на всех.** Встроенный long polling grammy обрабатывает
   апдейты последовательно: следующий `getUpdates` уходит только после того, как отработали
   обработчики предыдущей пачки. Поэтому повисший обработчик — это не «одна команда не ответила»,
@@ -353,6 +384,9 @@ teamSpeakMonitoring/         сам сервис
 | `OnlineNicknamesSource` | `telegram/TelegramBot.ts` | `TeamSpeakClient` | боту нужен только список ников |
 | `Notifier<TType>` | `notifications/events.ts` | `TeamSpeakChannelNotifier`, `LogNotifier`, `TelegramStatusNotifier` | канал доставки заменяем; `TType` — объединение обслуживаемых событий, любой ширины |
 | `MessageSender` | `notifications/TelegramStatusNotifier.ts` | `TelegramSender` | нотифаеру нужна одна операция «отправить текст», про grammy и chatId он не знает |
+| `RoleStore` | `access/AccessControl.ts` | `RoleRepository` | доступ не знает про SQL; роль-строку из базы проверяет сам |
+| `AccessChecker` | `telegram/AccessGuard.ts` | `AccessControl` | стражу нужен один вопрос — `can(chatId, permission)` |
+| `AccessManager`, `ChatMenus` | `telegram/AccessCommands.ts` | `AccessControl`, `TelegramBot` | командам доступа — роли и выдача; меню — по правам, поздним связыванием в `main.ts` |
 | `PlayerObserver` | `players/PlayerObserver.ts` | `PlayerObserverClient` | команды и лента не знают, что наблюдатель — это HTTP; отказ соседа приходит как `PlayerObserverUnavailable` |
 | `PlayerSubscriptionStore`, `PlayerEventStore`, `PendingSubscriptionStore` | у своих потребителей (`telegram/PlayerCommands.ts`, `players/*`) | `PlayerSubscriptionRepository` | каждый видит только свои три-четыре вопроса, а не весь репозиторий |
 
@@ -393,6 +427,7 @@ teamSpeakMonitoring/         сам сервис
 | `TEAMSPEAK_NOTIFIER` | `false` | вкл. обновление описания канала |
 | `LOG_NOTIFIER` | `true` | вкл. вывод события в лог |
 | `TELEGRAM_NOTIFIER` | `false` | вкл. Telegram-уведомления о статусах |
+| `TELEGRAM_ROOT_CHAT_IDS` | `""` | chat_id через запятую, у которых всегда `ROLE_ROOT` (`rbac.md`). В базе не хранится, из бота не отнимается. Не число — старт падает. Пусто — раздавать права некому, warn в лог |
 | `TELEGRAM_UPDATE_TIMEOUT_MS` | `60000` | потолок обработки одного апдейта; дольше — бот идёт за следующими, обработчик брошен. Больше самого долгого законного ответа (досье — до 30 с) |
 | `TS_QUERY_TIMEOUT_MS` | `10000` | потолок одной операции TeamSpeak вместе с подключением |
 | `LOG_LEVEL` | `debug` вне prod, `info` в prod | `debug` показывает каждый `getUpdates`, апдейт и вызов Bot API |
@@ -516,6 +551,15 @@ CREATE TABLE IF NOT EXISTS server_query_sources
 > никогда. Обнаружено при первом запуске тестов против свежего дев-окружения; лишняя строка убрана.
 > Настоящая починка — один исполняемый источник схемы: мигратор появился в 6b, дубль DDL в тестах
 > уходит в 6c.
+
+### Права на команды (миграция 009)
+
+`telegram_chat_roles (chat_id, role, granted_by, granted_at, note)`, ключ (`chat_id`, `role`),
+каскад от `telegram_chats`, плюс `telegram_chats.default_role_granted_at`. Хранится только
+**назначение**; что роль разрешает — в `src/access/Roles.ts`. `role` — строка, а не enum, по той же
+причине, что `query_type` и `event_kind`. `ROLE_ROOT` в базе не хранится — он из
+`TELEGRAM_ROOT_CHAT_IDS`. Миграция выдала `ROLE_SERVER_USER` всем чатам, что были до неё.
+Подробности и правила выдачи — [`rbac.md`](rbac.md).
 
 ### Подписки на игроков (миграция 008)
 
