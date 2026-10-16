@@ -29,7 +29,11 @@ export class AdminCatalogListing implements AdminCatalog {
         return {
             servers: servers.map(({id, name, gameAddress}) => ({id, name, gameAddress})),
             total,
-            marks: new Map(servers.map(server => [server.id, readinessIcon(readinessOf(server), server.enabled)])),
+            //📌 — закреплён: так видно, почему сервер стоит выше остальных.
+            marks: new Map(servers.map(server => [
+                server.id,
+                `${readinessIcon(readinessOf(server), server.enabled)}${server.listPosition === undefined ? "" : "📌"}`,
+            ])),
         };
     }
 

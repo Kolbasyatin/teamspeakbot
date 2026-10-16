@@ -45,7 +45,7 @@ class MemoryStore implements ServerAdminStore {
     public async createServer(name: string, gameAddress: string): Promise<number> {
         const id = this.nextId++;
 
-        this.servers.set(id, {id, name, gameAddress, enabled: false, subscriberCount: 0});
+        this.servers.set(id, {id, name, gameAddress, enabled: false, listPosition: undefined, subscriberCount: 0});
 
         return id;
     }
@@ -54,7 +54,14 @@ class MemoryStore implements ServerAdminStore {
         const server = this.servers.get(id);
 
         if (server) {
-            this.servers.set(id, {...server, ...patch});
+            //null в правке — снять позицию, как NULL в колонке у настоящего хранилища.
+            const {listPosition, ...rest} = patch;
+
+            this.servers.set(id, {
+                ...server,
+                ...rest,
+                ...(listPosition === undefined ? {} : {listPosition: listPosition ?? undefined}),
+            });
         }
     }
 
@@ -119,7 +126,14 @@ test("новый сервер — черновик: выключен", async () 
     const {admin, store} = setup();
     const id = valueOf(await admin.createServer("  #1 ARMA  ", ADDRESS));
 
-    assert.deepEqual(store.servers.get(id), {id, name: "#1 ARMA", gameAddress: ADDRESS, enabled: false, subscriberCount: 0});
+    assert.deepEqual(store.servers.get(id), {
+        id,
+        name: "#1 ARMA",
+        gameAddress: ADDRESS,
+        enabled: false,
+        listPosition: undefined,
+        subscriberCount: 0,
+    });
 });
 
 test("сервер без имени или с кривым адресом не создаётся", async () => {
@@ -320,6 +334,7 @@ test("к проверке идут только включённые приго�
         name: "S",
         gameAddress: "h:2001",
         enabled: false,
+        listPosition: undefined,
         subscriberCount: 0,
         sources: [
             {...base, id: 1, role: "primary", enabled: true, config},
@@ -332,4 +347,19 @@ test("к проверке идут только включённые приго�
         gameAddress: "h:2001",
         sources: [{id: 1, role: "primary", priority: 0, query: config}],
     });
+});
+
+test("позиция в списке: число от 1 ставит, off снимает, остальное — отказ", async () => {
+    const {admin, store} = setup();
+    const id = valueOf(await admin.createServer("S", ADDRESS));
+
+    assert.equal(valueOf(await admin.editServer(id, {position: "1"})).listPosition, 1);
+    assert.equal(store.servers.get(id)?.listPosition, 1);
+
+    assert.equal(valueOf(await admin.editServer(id, {position: "off"})).listPosition, undefined);
+    assert.equal(store.servers.get(id)?.listPosition, undefined);
+
+    for (const bad of ["0", "-1", "top", "1.5"]) {
+        assert.match(problemsOf(await admin.editServer(id, {position: bad})), /position/, `position=${bad}`);
+    }
 });

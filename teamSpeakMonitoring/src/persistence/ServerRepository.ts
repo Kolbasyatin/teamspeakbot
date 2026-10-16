@@ -8,6 +8,7 @@ import type {ServerQueryConfig} from "../monitoring/ServerQuery.js";
 import type {CatalogServer} from "../catalog/CatalogServer.js";
 import {type Pool} from "mariadb";
 import {parseQueryConfig} from "./parseQueryConfig.js";
+import {SERVER_LIST_ORDER} from "./serverListOrder.js";
 
 
 type ServerRow = {
@@ -79,8 +80,8 @@ export class ServerRepository {
     //включённые серверы, в том числе те, на которые никто пока не подписан, — иначе подписаться
     //было бы не на что. То самое разделение смыслов: enabled — про видимость, подписка — про опрос.
     //
-    //Сортировка по имени, а не по id: человек ищет глазами по названию. id добивает ничью,
-    //чтобы страницы не разъезжались при одинаковых именах.
+    //Сортировка — SERVER_LIST_ORDER: сначала закреплённые администратором, затем по имени —
+    //человек ищет глазами по названию.
     //
     //Сервер без включённого источника подписчику не показывается (итерация 14): подписаться на него
     //можно, а опрашивать нечем — подписка молчала бы. Такой сервер — черновик или поломка, и его видит
@@ -96,7 +97,7 @@ export class ServerRepository {
                 WHERE enabled = ?
                   AND (? = '' OR name LIKE CONCAT('%', ?, '%'))
                   AND ${HAS_ENABLED_SOURCE}
-                ORDER BY name, id
+                ORDER BY ${SERVER_LIST_ORDER}
                 LIMIT ? OFFSET ?
             `,
             [true, search, search, limit, offset],
@@ -138,7 +139,7 @@ export class ServerRepository {
                        game_address AS gameAddress
                 FROM monitored_servers
                 WHERE id IN (?)
-                ORDER BY name, id
+                ORDER BY ${SERVER_LIST_ORDER}
             `,
             [ids],
         );

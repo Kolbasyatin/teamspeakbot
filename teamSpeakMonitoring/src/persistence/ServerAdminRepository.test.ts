@@ -38,6 +38,7 @@ test("новый сервер создаётся выключенным и чи�
         name: "#1 ARMA",
         gameAddress: "37.48.253.41:2001",
         enabled: false,
+        listPosition: undefined,
         subscriberCount: 0,
         sources: [],
     });
@@ -121,8 +122,8 @@ test("список администратора показывает всё и �
     await repository.updateServer(ready, {enabled: true});
 
     assert.deepEqual(await repository.findSummaryPage("", 10, 0), [
-        {id: draft, name: "A draft", gameAddress: "1.1.1.1:1", enabled: false, enabledSourceCount: 0, enabledPrimaryCount: 0},
-        {id: ready, name: "B ready", gameAddress: "2.2.2.2:2", enabled: true, enabledSourceCount: 1, enabledPrimaryCount: 1},
+        {id: draft, name: "A draft", gameAddress: "1.1.1.1:1", enabled: false, listPosition: undefined, enabledSourceCount: 0, enabledPrimaryCount: 0},
+        {id: ready, name: "B ready", gameAddress: "2.2.2.2:2", enabled: true, listPosition: undefined, enabledSourceCount: 1, enabledPrimaryCount: 1},
     ]);
     assert.equal(await repository.countSummaries("draft"), 1);
 });
@@ -149,4 +150,38 @@ test("удаление источника не трогает сервер", asy
     await repository.deleteSource(sourceId);
 
     assert.deepEqual((await repository.findServer(serverId))?.sources, []);
+});
+
+test("позиция в списке ставится и снимается", async () => {
+    const id = await repository.createServer("S", "1.2.3.4:2001");
+
+    await repository.updateServer(id, {listPosition: 2});
+    assert.equal((await repository.findServer(id))?.listPosition, 2);
+
+    await repository.updateServer(id, {listPosition: null});
+    assert.equal((await repository.findServer(id))?.listPosition, undefined);
+});
+
+test("закреплённые идут первыми во всех списках, по позиции; остальные — по имени", async () => {
+    //Один порядок на каталог, «мои подписки» и админский список: закреплённый вверху каталога
+    //не должен оказываться в середине «моих».
+    const catalog = new ServerRepository(pool);
+    const ids: Record<string, number> = {};
+
+    for (const name of ["Alpha", "Bravo", "Charlie", "Delta"]) {
+        ids[name] = await repository.createServer(name, "1.2.3.4:2001");
+        await repository.createSource(ids[name]!, {role: "primary", priority: 0, enabled: true, config: A2S});
+        await repository.updateServer(ids[name]!, {enabled: true});
+    }
+
+    await repository.updateServer(ids["Delta"]!, {listPosition: 1});
+    await repository.updateServer(ids["Charlie"]!, {listPosition: 2});
+
+    const expected = ["Delta", "Charlie", "Alpha", "Bravo"];
+
+    assert.deepEqual((await catalog.findCatalogPage("", 10, 0)).map(server => server.name), expected);
+    assert.deepEqual((await catalog.findByIds(Object.values(ids))).map(server => server.name), expected);
+    assert.deepEqual((await repository.findSummaryPage("", 10, 0)).map(server => server.name), expected);
+    //Постранично порядок тот же: первая страница — закреплённые.
+    assert.deepEqual((await catalog.findCatalogPage("", 2, 0)).map(server => server.name), ["Delta", "Charlie"]);
 });

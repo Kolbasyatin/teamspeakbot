@@ -124,12 +124,15 @@ export function renderAdminCard(server: AdminServer, origin: ListOrigin): {text:
         text: [
             `<b>#${server.id} ${escapeHtml(server.name)}</b>`,
             `<code>${escapeHtml(server.gameAddress)}</code> · ${server.enabled ? "включён" : "выключен"} · подписчиков: ${server.subscriberCount}`,
+            server.listPosition === undefined
+                ? "Позиция в списке: нет — по имени"
+                : `📌 Позиция в списке: ${server.listPosition}`,
             readinessMark(cardReadiness(server), server.enabled),
             "",
             server.sources.length === 0 ? "Источников нет." : "Источники:",
             ...server.sources.map(renderSource),
             "",
-            `Править: <code>/server_edit ${server.id} name=… address=…</code>`,
+            `Править: <code>/server_edit ${server.id} name=… address=… position=N|off</code>`,
             `Источник: <code>/source_add ${server.id} &lt;тип&gt; …</code>, <code>/source_edit &lt;id&gt; …</code>`,
         ].join("\n"),
         keyboard,
@@ -193,7 +196,8 @@ export const SERVER_ADMIN_HELP = [
     "",
     "<code>/server_add Имя | host:port</code> — новый сервер (черновик, выключен)",
     "<code>/server &lt;id&gt;</code> — карточка: источники, вкл/выкл, удаление",
-    "<code>/server_edit &lt;id&gt; name=… address=… enabled=on|off</code>",
+    "<code>/server_edit &lt;id&gt; name=… address=… enabled=on|off position=N|off</code>",
+    "position — место в верху всех списков: 1 — самый верх; off — снять, сервер пойдёт по имени",
     "<code>/server_delete &lt;id&gt;</code> — с подтверждением",
     "",
     "<code>/source_add &lt;id сервера&gt; &lt;тип&gt; параметры…</code>",

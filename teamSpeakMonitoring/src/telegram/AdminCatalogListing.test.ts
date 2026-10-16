@@ -23,8 +23,8 @@ test("значки готовности выводятся из фактов, к
         summaries: async () => ({
             total: 2,
             servers: [
-                {id: 1, name: "Draft", gameAddress: "a:1", enabled: false, enabledSourceCount: 0, enabledPrimaryCount: 0},
-                {id: 2, name: "Ready", gameAddress: "b:2", enabled: true, enabledSourceCount: 1, enabledPrimaryCount: 1},
+                {id: 1, name: "Draft", gameAddress: "a:1", enabled: false, listPosition: undefined, enabledSourceCount: 0, enabledPrimaryCount: 0},
+                {id: 2, name: "Ready", gameAddress: "b:2", enabled: true, listPosition: undefined, enabledSourceCount: 1, enabledPrimaryCount: 1},
             ],
         }),
     });
@@ -37,4 +37,15 @@ test("значки готовности выводятся из фактов, к
         id: 2,
         origin: {view: "catalog", page: 1, search: "x"},
     });
+});
+
+test("закреплённый сервер помечен в админском списке", async () => {
+    const listing = new AdminCatalogListing({can: async () => true}, {
+        summaries: async () => ({
+            total: 1,
+            servers: [{id: 3, name: "Top", gameAddress: "c:3", enabled: true, listPosition: 1, enabledSourceCount: 1, enabledPrimaryCount: 1}],
+        }),
+    });
+
+    assert.equal((await listing.page("", 8, 0)).marks.get(3), "🟢📌");
 });

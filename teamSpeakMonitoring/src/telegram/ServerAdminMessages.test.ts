@@ -39,6 +39,7 @@ function server(overrides: Partial<AdminServer> = {}): AdminServer {
         name: "Test <b>",
         gameAddress: "37.48.253.41:2001",
         enabled: true,
+        listPosition: undefined,
         subscriberCount: 3,
         sources: [source()],
         ...overrides,
@@ -124,4 +125,9 @@ test("значок готовности: черновик и поломка ра
     assert.equal(readinessIcon("noSources", false), "📝");
     assert.equal(readinessIcon("noSources", true), "⚠️");
     assert.equal(readinessIcon("ready", true), "🟢");
+});
+
+test("карточка показывает позицию в списке", () => {
+    assert.match(renderAdminCard(server({listPosition: 1}), CATALOG_START).text, /📌 Позиция в списке: 1/);
+    assert.match(renderAdminCard(server(), CATALOG_START).text, /Позиция в списке: нет/);
 });

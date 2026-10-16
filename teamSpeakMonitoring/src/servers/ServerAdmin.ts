@@ -88,7 +88,7 @@ export class ServerAdmin {
         }
 
         if (problems.length === 0 && Object.keys(patch).length === 0) {
-            problems.push("нечего менять: укажите name=…, address=… или enabled=on|off");
+            problems.push("нечего менять: укажите name=…, address=…, enabled=on|off или position=N|off");
         }
 
         if (patch.enabled === true && !hasUsableSource(server.sources)) {
@@ -102,7 +102,16 @@ export class ServerAdmin {
         await this.store.updateServer(id, patch);
         await this.onChanged();
 
-        return {ok: true, value: {...server, ...patch}};
+        const {listPosition, ...rest} = patch;
+
+        return {
+            ok: true,
+            value: {
+                ...server,
+                ...rest,
+                ...(listPosition === undefined ? {} : {listPosition: listPosition ?? undefined}),
+            },
+        };
     }
 
     public async deleteServer(id: number): Promise<AdminResult<void>> {
@@ -315,7 +324,25 @@ function applyServerParam(patch: ServerPatch, key: string, value: string): strin
         return undefined;
     }
 
-    return `неизвестный параметр «${key}»; есть: name, address, enabled`;
+    //Позиция в списках бота: меньше — выше; off или пусто — снять. Ноль и отрицательные не принимаются:
+    //«первый» человек пишет как 1.
+    if (key === "position") {
+        const normalized = value.trim().toLowerCase();
+
+        if (normalized === "" || normalized === "off") {
+            patch.listPosition = null;
+            return undefined;
+        }
+
+        if (!/^\d+$/.test(normalized) || Number(normalized) < 1) {
+            return "position: целое число от 1 (меньше — выше) или off";
+        }
+
+        patch.listPosition = Number(normalized);
+        return undefined;
+    }
+
+    return `неизвестный параметр «${key}»; есть: name, address, enabled, position`;
 }
 
 function splitSourceParams(params: AdminParams): {common: CommonSourceParams; config: Record<string, string>} {

@@ -28,6 +28,8 @@ export interface AdminServer {
     name: string;
     gameAddress: string;
     enabled: boolean;
+    //Позиция в списках бота: меньше — выше. undefined — не закреплён, идёт по имени.
+    listPosition: number | undefined;
     subscriberCount: number;
     //Все источники, в порядке приоритета.
     sources: AdminSource[];
@@ -39,6 +41,7 @@ export interface AdminServerSummary {
     name: string;
     gameAddress: string;
     enabled: boolean;
+    listPosition: number | undefined;
     enabledSourceCount: number;
     enabledPrimaryCount: number;
 }
@@ -90,6 +93,8 @@ export interface ServerPatch {
     name?: string;
     gameAddress?: string;
     enabled?: boolean;
+    //null — снять позицию.
+    listPosition?: number | null;
 }
 
 export interface SourcePatch {

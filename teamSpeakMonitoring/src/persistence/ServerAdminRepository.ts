@@ -11,12 +11,14 @@ import type {
     SourcePatch,
 } from "../servers/ServerAdminModel.js";
 import {parseQueryConfig} from "./parseQueryConfig.js";
+import {SERVER_LIST_ORDER} from "./serverListOrder.js";
 
 type AdminServerRow = {
     id: number | bigint;
     name: string;
     gameAddress: string;
     enabled: number | boolean;
+    listPosition: number | null;
     subscriberCount: number | bigint;
 };
 
@@ -25,6 +27,7 @@ type SummaryRow = {
     name: string;
     gameAddress: string;
     enabled: number | boolean;
+    listPosition: number | null;
     enabledSourceCount: number | bigint;
     enabledPrimaryCount: number | bigint;
 };
@@ -59,6 +62,7 @@ export class ServerAdminRepository implements ServerAdminStore {
                        server.name,
                        server.game_address AS gameAddress,
                        server.enabled,
+                       server.list_position AS listPosition,
                        (SELECT COUNT(*)
                         FROM server_subscriptions subscription
                         WHERE subscription.server_id = server.id) AS subscriberCount
@@ -82,6 +86,7 @@ export class ServerAdminRepository implements ServerAdminStore {
             name: server.name,
             gameAddress: server.gameAddress,
             enabled: Boolean(server.enabled),
+            listPosition: server.listPosition ?? undefined,
             subscriberCount: Number(server.subscriberCount),
             sources: sources.map(toAdminSource),
         };
@@ -93,8 +98,8 @@ export class ServerAdminRepository implements ServerAdminStore {
         return row ? toAdminSource(row) : undefined;
     }
 
-    //Все серверы, включая выключенные и черновики. Порядок — по имени, как в каталоге: администратор
-    //ищет глазами там же, где и все.
+    //Все серверы, включая выключенные и черновики. Порядок тот же, что в каталоге (SERVER_LIST_ORDER):
+    //администратор видит закреплённые там же, где их увидят все.
     public async findSummaryPage(search: string, limit: number, offset: number): Promise<AdminServerSummary[]> {
         const rows = await this.pool.query<SummaryRow[]>(
             `
@@ -102,6 +107,7 @@ export class ServerAdminRepository implements ServerAdminStore {
                        server.name,
                        server.game_address AS gameAddress,
                        server.enabled,
+                       server.list_position AS listPosition,
                        (SELECT COUNT(*)
                         FROM server_query_sources source
                         WHERE source.server_id = server.id
@@ -113,7 +119,7 @@ export class ServerAdminRepository implements ServerAdminStore {
                           AND source.role = 'primary') AS enabledPrimaryCount
                 FROM monitored_servers server
                 WHERE (? = '' OR server.name LIKE CONCAT('%', ?, '%'))
-                ORDER BY server.name, server.id
+                ORDER BY ${SERVER_LIST_ORDER}
                 LIMIT ? OFFSET ?
             `,
             [search, search, limit, offset],
@@ -124,6 +130,7 @@ export class ServerAdminRepository implements ServerAdminStore {
             name: row.name,
             gameAddress: row.gameAddress,
             enabled: Boolean(row.enabled),
+            listPosition: row.listPosition ?? undefined,
             enabledSourceCount: Number(row.enabledSourceCount),
             enabledPrimaryCount: Number(row.enabledPrimaryCount),
         }));
@@ -156,6 +163,8 @@ export class ServerAdminRepository implements ServerAdminStore {
             name: patch.name,
             game_address: patch.gameAddress,
             enabled: patch.enabled,
+            //null — снять позицию: в колонку уходит NULL, а undefined означает «не трогать».
+            list_position: patch.listPosition,
         });
     }
 
