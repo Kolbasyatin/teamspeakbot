@@ -15,6 +15,7 @@ import {
 import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat, TelegramChatType} from "./TelegramChat.js";
 import {COMMAND_ACCESS} from "./commandAccess.js";
+import {personOf} from "./AccessGuard.js";
 
 //Доступ глазами команд: всё, что им нужно от AccessControl, и ничего сверх того.
 export interface AccessManager {
@@ -27,6 +28,8 @@ export interface AccessManager {
     permissionsOf(chatId: number): Promise<ReadonlySet<Permission>>;
 
     listAssignments(): Promise<RoleAssignment[]>;
+
+    listAssignmentsOf(chatId: number): Promise<RoleAssignment[]>;
 
     grant(actor: AccessActor, targetChatId: number, role: Role, note: string | undefined): Promise<AccessChange>;
 
@@ -45,9 +48,18 @@ export interface ChatMenus {
 
 export interface ChatRegistry {
     saveChat(chat: TelegramChat): Promise<void>;
+
+    findChat(chatId: number): Promise<TelegramChat | undefined>;
 }
 
 const INTRO = "Слежу за игровыми серверами Arma Reforger и пишу, когда они падают и поднимаются.";
+
+const GRANT_DATE = new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "Europe/Moscow",
+});
 
 //Telegram режет сообщение на 4096 символах; запас — под хвост «…и ещё N».
 const MESSAGE_BUDGET = 3_800;
@@ -112,11 +124,17 @@ export function resolveTarget(
         return explicit;
     }
 
-    if (reply && reply.forum_topic_created === undefined && reply.from && !reply.from.is_bot) {
-        return reply.from.id;
+    return replyAuthor(reply) ?? (chat.type === "private" ? undefined : chat.id);
+}
+
+//На чьё сообщение ответили. undefined — ответа нет или он не указывает на человека:
+//ответ боту или служебное сообщение о создании темы.
+export function replyAuthor(reply: Message | undefined): number | undefined {
+    if (!reply || reply.forum_topic_created !== undefined || !reply.from || reply.from.is_bot) {
+        return undefined;
     }
 
-    return chat.type === "private" ? undefined : chat.id;
+    return reply.from.id;
 }
 
 //Права чата и управление ими. Отдельный набор: /start, /help и /whoami доступны всем
@@ -138,7 +156,7 @@ export class AccessCommands implements BotCommands {
             {command: "whoami", description: "мой chat_id и мои роли"},
             {command: "grant", description: "выдать роль"},
             {command: "revoke", description: "отозвать роль"},
-            {command: "roles", description: "кому какие роли выданы"},
+            {command: "roles", description: "роли: все или одного чата"},
         ];
     }
 
@@ -148,7 +166,7 @@ export class AccessCommands implements BotCommands {
         bot.command("whoami", ctx => this.whoami(ctx));
         bot.command("grant", ctx => this.grant(ctx, argumentOf(ctx)));
         bot.command("revoke", ctx => this.revoke(ctx, argumentOf(ctx)));
-        bot.command("roles", ctx => this.roles(ctx));
+        bot.command("roles", ctx => this.roles(ctx, argumentOf(ctx)));
     }
 
     //Публикует персональные меню чатам, чьи права отличаются от умолчания. На старте, потому что
@@ -228,7 +246,13 @@ export class AccessCommands implements BotCommands {
             return;
         }
 
-        const change = await this.access.grant(actorOf(ctx), parsed.targetChatId, parsed.role, parsed.note);
+        const actor = actorOf(ctx);
+
+        if (!actor) {
+            return;
+        }
+
+        const change = await this.access.grant(actor, parsed.targetChatId, parsed.role, parsed.note);
 
         if (change.result === "granted") {
             await this.publishMenu(parsed.targetChatId);
@@ -244,7 +268,13 @@ export class AccessCommands implements BotCommands {
             return;
         }
 
-        const change = await this.access.revoke(actorOf(ctx), parsed.targetChatId, parsed.role);
+        const actor = actorOf(ctx);
+
+        if (!actor) {
+            return;
+        }
+
+        const change = await this.access.revoke(actor, parsed.targetChatId, parsed.role);
 
         if (change.result === "revoked") {
             await this.publishMenu(parsed.targetChatId);
@@ -253,10 +283,43 @@ export class AccessCommands implements BotCommands {
         await ctx.reply(this.describeChange(change, parsed.targetChatId, parsed.role));
     }
 
+    ///roles <chat_id> или ответом на сообщение человека — роли одного чата; без адресата — обзор.
+    //Группа без ответа здесь, в отличие от /grant, адресатом не считается: «/roles» в группе
+    //должен показать обзор, а роли самой группы показывает /whoami.
+    private async roles(ctx: Context, argument: string): Promise<void> {
+        const targetChatId = parseRoleCommand(argument).targetChatId
+            ?? replyAuthor(ctx.message?.reply_to_message);
+
+        if (targetChatId !== undefined) {
+            await this.chatRoles(ctx, targetChatId);
+            return;
+        }
+
+        if (argument !== "") {
+            await ctx.reply("Чьи роли показать? /roles <chat_id> — id даёт /whoami в том чате.");
+            return;
+        }
+
+        await this.rolesOverview(ctx);
+    }
+
+    private async chatRoles(ctx: Context, chatId: number): Promise<void> {
+        const assignments = await this.access.listAssignmentsOf(chatId);
+        const permissions = await this.access.permissionsOf(chatId);
+
+        await ctx.reply(fitMessage(renderChatRoles({
+            chatId,
+            chat: await this.chats.findChat(chatId),
+            isRoot: this.access.isRoot(chatId),
+            assignments,
+            commands: this.menus.menuFor(permissions).map(item => item.command),
+        })));
+    }
+
     //Кому что выдано и какие роли вообще есть. Роль по умолчанию есть почти у каждого чата,
     //поэтому она считается, а не перечисляется: иначе список рос бы с каждым /start
-    //и упёрся бы в предел длины сообщения.
-    private async roles(ctx: Context): Promise<void> {
+    //и упёрся бы в предел длины сообщения. Роли конкретного чата — /roles <chat_id>.
+    private async rolesOverview(ctx: Context): Promise<void> {
         const assignments = await this.access.listAssignments();
         const byChat = new Map<number, RoleAssignment[]>();
         let defaultCount = 0;
@@ -273,6 +336,7 @@ export class AccessCommands implements BotCommands {
         const lines = [
             `Root (из конфигурации): ${this.access.listRootChatIds().join(", ") || "не задан"}`,
             `${DEFAULT_ROLE} (по умолчанию): ${defaultCount} чат(ов)`,
+            "Роли одного чата: /roles <chat_id> или ответом на сообщение человека.",
             "",
         ];
 
@@ -362,6 +426,63 @@ export class AccessCommands implements BotCommands {
     }
 }
 
+//Роли одного чата: что выдано, кем и когда, и что из этого следует на деле — список команд.
+//Чистая функция: всё нужное приходит параметром, поэтому проверяется без grammy и без базы.
+export interface ChatRolesView {
+    chatId: number;
+    //undefined — чат боту не писал.
+    chat: TelegramChat | undefined;
+    isRoot: boolean;
+    //Как лежат в базе, включая роли, которых в коде уже нет.
+    assignments: readonly RoleAssignment[];
+    //Команды, доступные чату по его правам.
+    commands: readonly string[];
+}
+
+export function renderChatRoles(view: ChatRolesView): string[] {
+    const title = view.chat?.title ? ` «${view.chat.title}»` : "";
+    const type = view.chat ? ` (${view.chat.type})` : "";
+    const lines = [`Чат ${view.chatId}${title}${type}`];
+
+    if (!view.chat && !view.isRoot) {
+        lines.push("Боту не писал — ролей нет, пока не нажмёт /start.");
+    }
+
+    const roles: string[] = [];
+
+    if (view.isRoot) {
+        roles.push("• ROLE_ROOT — из конфигурации, отнять нельзя");
+    }
+
+    for (const assignment of view.assignments) {
+        roles.push(`• ${describeChatAssignment(assignment)}`);
+    }
+
+    lines.push("", roles.length === 0 ? "Ролей нет." : "Роли:", ...roles);
+    lines.push("", `Доступные команды: ${view.commands.map(command => `/${command}`).join(" ")}`);
+
+    return lines;
+}
+
+function describeChatAssignment(assignment: RoleAssignment): string {
+    const role = parseRole(assignment.role);
+
+    //Роль переименовали или удалили в коде: назначение лежит мёртвым, и об этом надо сказать прямо.
+    if (role === undefined || role !== assignment.role) {
+        return `${assignment.role} — нет в коде, не действует`;
+    }
+
+    const details = [
+        assignment.grantedBy === undefined
+            ? (role === DEFAULT_ROLE ? "по умолчанию" : undefined)
+            : `выдал ${assignment.grantedBy}`,
+        GRANT_DATE.format(assignment.grantedAt),
+        assignment.note === undefined ? undefined : `«${assignment.note}»`,
+    ].filter(detail => detail !== undefined);
+
+    return `${role} — ${details.join(", ")}`;
+}
+
 function describeAssignment(assignment: RoleAssignment): string {
     const details = [
         assignment.grantedBy === undefined ? undefined : `выдал ${assignment.grantedBy}`,
@@ -408,8 +529,12 @@ function fitMessage(lines: readonly string[]): string {
     return kept.join("\n");
 }
 
-function actorOf(ctx: Context): AccessActor {
-    return {chatId: ctx.chatId ?? 0, userId: ctx.from?.id};
+//Страж пропускает раздачу прав только человеку, поэтому undefined здесь — не обычный путь,
+//а страховка на случай, если команду когда-нибудь зарегистрируют мимо стража.
+function actorOf(ctx: Context): AccessActor | undefined {
+    const userId = personOf(ctx);
+
+    return userId === undefined ? undefined : {userId};
 }
 
 function argumentOf(ctx: Context): string {

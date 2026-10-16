@@ -40,6 +40,16 @@ export class RoleRepository implements RoleStore {
     }
 
     public async findAssignments(): Promise<RoleAssignment[]> {
+        return this.queryAssignments("", []);
+    }
+
+    public async findAssignmentsByChat(chatId: number): Promise<RoleAssignment[]> {
+        return this.queryAssignments("WHERE role.chat_id = ?", [chatId]);
+    }
+
+    //Отбор подставляется готовой строкой из двух методов выше, а не приходит снаружи:
+    //значения идут только параметрами.
+    private async queryAssignments(where: string, parameters: unknown[]): Promise<RoleAssignment[]> {
         const rows = await this.pool.query<AssignmentRow[]>(
             `
                 SELECT role.chat_id    AS chatId,
@@ -50,8 +60,10 @@ export class RoleRepository implements RoleStore {
                        chat.title
                 FROM telegram_chat_roles role
                          JOIN telegram_chats chat ON chat.chat_id = role.chat_id
+                ${where}
                 ORDER BY role.chat_id, role.role
             `,
+            parameters,
         );
 
         return rows.map(row => ({

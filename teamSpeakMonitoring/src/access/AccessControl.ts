@@ -29,6 +29,10 @@ export interface RoleStore {
 
     findAssignments(): Promise<RoleAssignment[]>;
 
+    //Назначения одного чата — со строками, которых в коде уже нет: администратору надо видеть
+    //и мёртвые назначения, иначе непонятно, почему «роль выдана, а не работает».
+    findAssignmentsByChat(chatId: number): Promise<RoleAssignment[]>;
+
     grant(chatId: number, role: Role, grantedBy: number | undefined, note: string | undefined): Promise<StoredGrantResult>;
 
     //true — назначение было и удалено.
@@ -38,11 +42,10 @@ export interface RoleStore {
     grantDefaultOnce(chatId: number, role: Role): Promise<boolean>;
 }
 
-//Кто действует: чат, в котором набрана команда (по нему проверяются права — как у стража),
-//и человек, который её набрал (его id пишется в granted_by).
+//Кто раздаёт права: человек, а не чат, где набрана команда (см. accessSubject в commandAccess.ts).
+//Его личные права — права его лички с ботом: user_id равен её chat_id. Он же пишется в granted_by.
 export interface AccessActor {
-    chatId: number;
-    userId: number | undefined;
+    userId: number;
 }
 
 export type AccessChange =
@@ -98,6 +101,10 @@ export class AccessControl {
         return this.store.findAssignments();
     }
 
+    public listAssignmentsOf(chatId: number): Promise<RoleAssignment[]> {
+        return this.store.findAssignmentsByChat(chatId);
+    }
+
     public async grant(actor: AccessActor, targetChatId: number, role: Role, note: string | undefined): Promise<AccessChange> {
         const refusal = await this.refusalFor(actor, role);
 
@@ -105,7 +112,7 @@ export class AccessControl {
             return {result: "refused", reason: refusal};
         }
 
-        const result = await this.store.grant(targetChatId, role, actor.userId ?? actor.chatId, note);
+        const result = await this.store.grant(targetChatId, role, actor.userId, note);
 
         this.cache.delete(targetChatId);
         this.logger.info({actor, targetChatId, role, result}, "Выдача роли");
@@ -156,7 +163,7 @@ export class AccessControl {
     }
 
     private async refusalFor(actor: AccessActor, role: Role): Promise<ManageRefusal | undefined> {
-        return manageRefusal(await this.permissionsOf(actor.chatId), this.isRoot(actor.chatId), role);
+        return manageRefusal(await this.permissionsOf(actor.userId), this.isRoot(actor.userId), role);
     }
 
     private async storedRolesOf(chatId: number): Promise<readonly Role[]> {

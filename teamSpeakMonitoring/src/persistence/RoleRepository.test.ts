@@ -98,3 +98,18 @@ test("очистка подписок на игроков забирает и п
     assert.deepEqual(await players.findPendingByChat(100), []);
     assert.deepEqual(await players.findSubscribedPlayerIds(200), [7]);
 });
+
+test("назначения одного чата — только его, включая роли, которых нет в коде", async () => {
+    await insertTelegramChatFixture(pool, {chatId: 100, title: "Вася"});
+    await insertTelegramChatFixture(pool, {chatId: 200});
+    await repository.grant(100, "ROLE_PLAYER_USER", 1, "из клана");
+    await repository.grant(200, "ROLE_TS_VIEW", 1, undefined);
+    await pool.query("INSERT INTO telegram_chat_roles (chat_id, role) VALUES (100, 'ROLE_SUPER_USER')");
+
+    const assignments = await repository.findAssignmentsByChat(100);
+
+    assert.deepEqual(assignments.map(item => item.role), ["ROLE_PLAYER_USER", "ROLE_SUPER_USER"]);
+    assert.equal(assignments[0]?.note, "из клана");
+    assert.equal(assignments[0]?.chatTitle, "Вася");
+    assert.deepEqual(await repository.findAssignmentsByChat(555), []);
+});

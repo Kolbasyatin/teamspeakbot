@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Composer, Context} from "grammy";
-import {CALLBACK_ACCESS, COMMAND_ACCESS, callbackPermission, commandPermission} from "./commandAccess.js";
+import {CALLBACK_ACCESS, COMMAND_ACCESS, accessSubject, callbackPermission, commandPermission} from "./commandAccess.js";
 import {PERMISSIONS} from "../access/Roles.js";
 import type {BotCommands} from "./TelegramBot.js";
 import {AccessCommands, type AccessManager, type ChatMenus, type ChatRegistry} from "./AccessCommands.js";
@@ -158,4 +158,17 @@ test("незнакомая кнопка и незнакомая команда �
     assert.equal(callbackPermission("zz:1"), undefined);
     assert.equal(commandPermission("constructor"), undefined, "прототип объекта картой не считается");
     assert.equal(commandPermission("debug"), undefined);
+});
+
+test("раздача прав проверяется по человеку, всё остальное — по чату", () => {
+    //Иначе root не смог бы раздавать права в группе, а группа с правами админа давала бы их
+    //каждому участнику.
+    for (const [command, permission] of Object.entries(COMMAND_ACCESS)) {
+        const expected = permission === "ROLE_ACCESS_MANAGE" ? "user" : "chat";
+
+        assert.equal(accessSubject(permission), expected, `/${command}`);
+    }
+
+    assert.equal(accessSubject(COMMAND_ACCESS["grant"] ?? "ROLE_ANONYMOUS"), "user");
+    assert.equal(accessSubject(COMMAND_ACCESS["watch"] ?? "ROLE_ANONYMOUS"), "chat");
 });

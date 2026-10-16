@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Message} from "grammy/types";
-import {parseRoleCommand, renderRoleCatalog, resolveTarget} from "./AccessCommands.js";
+import {parseRoleCommand, renderChatRoles, renderRoleCatalog, replyAuthor, resolveTarget} from "./AccessCommands.js";
+import type {RoleAssignment} from "../access/AccessControl.js";
 
 const PRIVATE = {id: 100, type: "private"};
 const GROUP = {id: -1001234567890, type: "supergroup"};
@@ -70,4 +71,72 @@ test("справочник ролей показывает команды каж
     assert.match(catalog, /ROLE_PLAYER_DOSSIER: \/playerinfo \/steaminfo/);
     assert.match(catalog, /ROLE_ROOT: ROLE_PLAYER_USER, ROLE_USER_ADMIN/);
     assert.doesNotMatch(catalog, /ROLE_ANONYMOUS:/);
+});
+
+function assignment(role: string, extra: Partial<RoleAssignment> = {}): RoleAssignment {
+    return {
+        chatId: GROUP.id,
+        role,
+        grantedBy: undefined,
+        grantedAt: new Date("2026-10-16T12:00:00Z"),
+        note: undefined,
+        chatTitle: "Клан",
+        ...extra,
+    };
+}
+
+test("роли чата: кто выдал, когда, заметка и итоговые команды", () => {
+    const text = renderChatRoles({
+        chatId: GROUP.id,
+        chat: {chatId: GROUP.id, type: "supergroup", title: "Клан"},
+        isRoot: false,
+        assignments: [
+            assignment("ROLE_PLAYER_USER", {grantedBy: 123, note: "наш клан"}),
+            assignment("ROLE_SERVER_USER"),
+        ],
+        commands: ["serverlist", "watch"],
+    }).join("\n");
+
+    assert.match(text, /Чат -1001234567890 «Клан» \(supergroup\)/);
+    assert.match(text, /ROLE_PLAYER_USER — выдал 123, 16\.10\.2026, «наш клан»/);
+    assert.match(text, /ROLE_SERVER_USER — по умолчанию, 16\.10\.2026/);
+    assert.match(text, /Доступные команды: \/serverlist \/watch/);
+});
+
+test("роли чата: root из конфига виден, даже если в базе пусто", () => {
+    const text = renderChatRoles({
+        chatId: 100,
+        chat: undefined,
+        isRoot: true,
+        assignments: [],
+        commands: ["roles"],
+    }).join("\n");
+
+    assert.match(text, /ROLE_ROOT — из конфигурации/);
+    assert.doesNotMatch(text, /Боту не писал/);
+});
+
+test("роли чата: незнакомый чат и мёртвое назначение названы прямо", () => {
+    const unknown = renderChatRoles({chatId: 555, chat: undefined, isRoot: false, assignments: [], commands: []});
+
+    assert.match(unknown.join("\n"), /Боту не писал/);
+    assert.match(unknown.join("\n"), /Ролей нет\./);
+
+    //Роль переименовали в коде, а строка в базе осталась: «выдана, но не работает» должно быть видно.
+    const dead = renderChatRoles({
+        chatId: 100,
+        chat: {chatId: 100, type: "private", title: "Вася"},
+        isRoot: false,
+        assignments: [assignment("ROLE_SUPER_USER")],
+        commands: [],
+    });
+
+    assert.match(dead.join("\n"), /ROLE_SUPER_USER — нет в коде, не действует/);
+});
+
+test("автор ответа: человек — да, бот и тема — нет", () => {
+    assert.equal(replyAuthor(replyFrom(777)), 777);
+    assert.equal(replyAuthor(undefined), undefined);
+    assert.equal(replyAuthor({from: {id: 9, is_bot: true, first_name: "Bot"}} as Message), undefined);
+    assert.equal(replyAuthor(replyFrom(777, {forum_topic_created: {name: "Общее", icon_color: 0}})), undefined);
 });

@@ -24,6 +24,10 @@ class MemoryRoleStore implements RoleStore {
         return [];
     }
 
+    public async findAssignmentsByChat(): Promise<RoleAssignment[]> {
+        return [];
+    }
+
     public async grant(chatId: number, role: Role): Promise<StoredGrantResult> {
         if (!this.chats.has(chatId)) {
             return "unknownChat";
@@ -70,7 +74,8 @@ function createAccess(store = new MemoryRoleStore()): {
     return {access, store, lost};
 }
 
-const actor = (chatId: number) => ({chatId, userId: chatId});
+//Права раздаёт человек: его личные права — права его лички, user_id равен её chat_id.
+const actor = (userId: number) => ({userId});
 
 test("root из конфига — root даже при пустой базе", async () => {
     const {access} = createAccess();

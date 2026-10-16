@@ -66,6 +66,20 @@ export const CALLBACK_ACCESS: readonly CallbackAccessRule[] = [
     {match: PLAYER_INFO_PATTERN, permission: "ROLE_PLAYER_DOSSIER"},
 ];
 
+//Чьи права проверять. Обычные команды — по ЧАТУ: выдал роль группе, ею пользуются все участники.
+//Раздача прав — по ЧЕЛОВЕКУ: права раздаёт конкретный человек, и root, набравший /grant в группе
+//ответом на чужое сообщение, должен быть root и там, а остальные участники группы — нет.
+//Личные права человека — это права его лички с ботом (user_id равен её chat_id), поэтому
+//второго хранилища не нужно. Правило выводится из права, а не из списка команд: новая команда
+//раздачи прав не может случайно начать проверяться по чату.
+export type AccessSubject = "chat" | "user";
+
+const PERSONAL_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>(["ROLE_ACCESS_MANAGE"]);
+
+export function accessSubject(permission: Permission): AccessSubject {
+    return PERSONAL_PERMISSIONS.has(permission) ? "user" : "chat";
+}
+
 export function commandPermission(command: string): Permission | undefined {
     return Object.hasOwn(COMMAND_ACCESS, command) ? COMMAND_ACCESS[command] : undefined;
 }

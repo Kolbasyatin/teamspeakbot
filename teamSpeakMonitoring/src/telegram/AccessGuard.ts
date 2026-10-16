@@ -1,7 +1,7 @@
 import type {Context, MiddlewareFn} from "grammy";
 import type {Logger} from "pino";
 import type {Permission} from "../access/Roles.js";
-import {callbackPermission, commandPermission} from "./commandAccess.js";
+import {accessSubject, callbackPermission, commandPermission} from "./commandAccess.js";
 
 //Стражу нужен один вопрос — «можно ли этому чату вот это». Весь AccessControl ему знать незачем.
 export interface AccessChecker {
@@ -54,6 +54,19 @@ export function classifyUpdate(ctx: Context): GuardedUpdate {
     return {kind: "command", command: name};
 }
 
+//Кто набрал команду, если это человек. Пост канала идёт без автора, а анонимный админ группы
+//пишет «от имени группы» (sender_chat, from — служебный GroupAnonymousBot): ни того ни другого
+//человеком считать нельзя, иначе личные права достались бы любому, кто так пишет.
+export function personOf(ctx: Context): number | undefined {
+    const from = ctx.from;
+
+    if (!from || from.is_bot || ctx.message?.sender_chat !== undefined) {
+        return undefined;
+    }
+
+    return from.id;
+}
+
 //Единственная точка проверки прав для всего входящего. Ставится ПЕРЕД всеми наборами команд
 //одним экземпляром: в grammy middleware, не вызвавший next(), останавливает апдейт целиком,
 //поэтому страж на каждом наборе отдельно перекрыл бы команды всех следующих.
@@ -80,8 +93,10 @@ export function createAccessGuard(access: AccessChecker, logger: Logger): Middle
                 return;
             }
 
-            if (!await access.can(chatId, required)) {
-                logger.info({chatId, command: update.command, required}, "Команда отклонена: нет прав");
+            const subjectId = accessSubject(required) === "user" ? personOf(ctx) : chatId;
+
+            if (subjectId === undefined || !await access.can(subjectId, required)) {
+                logger.info({chatId, userId: ctx.from?.id, command: update.command, required}, "Команда отклонена: нет прав");
                 await ctx.reply(DENIED_TEXT);
                 return;
             }

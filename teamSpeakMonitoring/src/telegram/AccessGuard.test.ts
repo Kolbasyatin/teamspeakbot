@@ -7,14 +7,23 @@ import {silentLogger} from "../test/silentLogger.js";
 
 const ME = {username: "TsBot"};
 
-function commandContext(text: string, chatId = 42): Context & {replies: string[]; answers: string[]} {
+function commandContext(
+    text: string,
+    chatId = 42,
+    sender: {from?: {id: number; is_bot: boolean}; senderChat?: {id: number}} = {},
+): Context & {replies: string[]; answers: string[]} {
     const commandLength = text.split(/\s/)[0]?.length ?? 0;
     const replies: string[] = [];
 
     return {
         me: ME,
         chatId,
-        message: {text, entities: [{type: "bot_command", offset: 0, length: commandLength}]},
+        from: sender.from,
+        message: {
+            text,
+            entities: [{type: "bot_command", offset: 0, length: commandLength}],
+            ...(sender.senderChat ? {sender_chat: sender.senderChat} : {}),
+        },
         replies,
         answers: [],
         reply: async (reply: string) => {
@@ -125,4 +134,62 @@ test("кнопка без чата (inline-сообщение) не проход
     const ctx = {...callbackContext("pi:4812"), chatId: undefined} as unknown as Context;
 
     assert.equal(await passes(guard, ctx), false);
+});
+
+//Права по id: у группы одни, у человека другие — ровно то, что различают команды раздачи прав.
+function checkerById(granted: Readonly<Record<number, readonly Permission[]>>): AccessChecker {
+    return {can: async (id, permission) => (granted[id] ?? []).includes(permission)};
+}
+
+const GROUP = -1001234567890;
+const ROOT = 100;
+const VASYA = 200;
+const rights = checkerById({
+    [GROUP]: ["ROLE_SERVER_LIST"],
+    [ROOT]: ["ROLE_ACCESS_MANAGE", "ROLE_SERVER_LIST"],
+});
+
+test("root раздаёт права в группе, у которой самой таких прав нет", async () => {
+    const guard = createAccessGuard(rights, silentLogger);
+
+    assert.equal(await passes(guard, commandContext("/grant player_user", GROUP, {from: {id: ROOT, is_bot: false}})), true);
+});
+
+test("участник группы без личных прав раздавать их не может", async () => {
+    const guard = createAccessGuard(rights, silentLogger);
+    const ctx = commandContext("/grant player_user", GROUP, {from: {id: VASYA, is_bot: false}});
+
+    assert.equal(await passes(guard, ctx), false);
+    assert.deepEqual(ctx.replies, [DENIED_TEXT]);
+});
+
+test("группа с правом раздачи не передаёт его участникам", async () => {
+    //Проверяется человек, а не чат: права группы для раздачи прав не в счёт.
+    const guard = createAccessGuard(checkerById({[GROUP]: ["ROLE_ACCESS_MANAGE"]}), silentLogger);
+
+    assert.equal(await passes(guard, commandContext("/roles", GROUP, {from: {id: VASYA, is_bot: false}})), false);
+});
+
+test("обычные команды по-прежнему проверяются по чату", async () => {
+    //Вася без личных прав пользуется правами группы, как и договаривались.
+    const guard = createAccessGuard(rights, silentLogger);
+
+    assert.equal(await passes(guard, commandContext("/serverlist", GROUP, {from: {id: VASYA, is_bot: false}})), true);
+});
+
+test("анонимный админ группы — не человек, права раздавать не может", async () => {
+    //Пишет «от имени группы»: from — служебный бот, sender_chat — сама группа.
+    const guard = createAccessGuard(checkerById({1087968824: ["ROLE_ACCESS_MANAGE"]}), silentLogger);
+    const ctx = commandContext("/grant player_user", GROUP, {
+        from: {id: 1087968824, is_bot: true},
+        senderChat: {id: GROUP},
+    });
+
+    assert.equal(await passes(guard, ctx), false);
+});
+
+test("команда раздачи прав без автора (пост канала) не проходит", async () => {
+    const guard = createAccessGuard(rights, silentLogger);
+
+    assert.equal(await passes(guard, commandContext("/roles", GROUP)), false);
 });
