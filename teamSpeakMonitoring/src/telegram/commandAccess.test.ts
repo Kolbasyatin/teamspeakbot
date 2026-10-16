@@ -15,6 +15,7 @@ import {
 } from "./SubscriptionCommands.js";
 import type {PlayerObserver} from "../players/PlayerObserver.js";
 import {ServerAdminCommands, type AdminServerChecker, type ServerAdministration} from "./ServerAdminCommands.js";
+import {FeedbackCommands, type FeedbackSender, type FeedbackStore} from "./FeedbackCommands.js";
 import {encodePlayerCard, encodePlayerHistory, encodePlayerInfo, encodePlayerPick, encodePlayerWait} from "./PlayerMessages.js";
 import {silentLogger} from "../test/silentLogger.js";
 
@@ -59,6 +60,13 @@ function allCommandSets(): BotCommands[] {
         new ServerAdminCommands(
             {} as unknown as ServerAdministration,
             {} as unknown as AdminServerChecker,
+            silentLogger,
+        ),
+        new FeedbackCommands(
+            {} as unknown as FeedbackStore,
+            {} as unknown as ChatRegistry,
+            {} as unknown as FeedbackSender,
+            [],
             silentLogger,
         ),
     ];

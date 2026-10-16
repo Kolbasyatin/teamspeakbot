@@ -15,6 +15,8 @@ import {ServerAdmin} from "./servers/ServerAdmin.js";
 import {checkableServer} from "./servers/ServerAdminModel.js";
 import {ServerAdminCommands} from "./telegram/ServerAdminCommands.js";
 import {AdminCatalogListing} from "./telegram/AdminCatalogListing.js";
+import {FeedbackCommands} from "./telegram/FeedbackCommands.js";
+import {FeedbackRepository} from "./persistence/FeedbackRepository.js";
 import {AccessControl} from "./access/AccessControl.js";
 import {createPool} from "mariadb";
 import {
@@ -216,6 +218,26 @@ async function main(): Promise<any> {
             return configs[0] ? monitor.checkOnce(configs[0]) : undefined;
         },
     }, log.child({component: "serverAdmin"}));
+    //Обратная связь. Куда — FEEDBACK_CHAT_ID, а если пусто, всем root: им бот писать может, они ему
+    //писали. Отправка — через sender бота с его троттлингом, тем же поздним связыванием, что chatSender.
+    const feedbackRecipients = tgProperties.feedbackChatIds.length > 0
+        ? tgProperties.feedbackChatIds
+        : tgProperties.rootChatIds;
+    const feedbackCommands = new FeedbackCommands(
+        new FeedbackRepository(pool),
+        subscriptionRepository,
+        {
+            send: async (chatId, html) => {
+                if (!telegramBot) {
+                    throw new Error("Telegram отключён");
+                }
+
+                return telegramBot.sender.sendForId(chatId, html);
+            },
+        },
+        feedbackRecipients,
+        log.child({component: "feedback"}),
+    );
     const accessCommands = new AccessCommands(access, subscriptionRepository, chatMenus, log.child({component: "access"}));
 
     if (tgProperties.rootChatIds.length === 0) {
@@ -230,6 +252,7 @@ async function main(): Promise<any> {
     let telegramBot: TelegramBot | undefined = telegramApi
         ? new TelegramBot(telegramApi, [
             accessCommands,
+            feedbackCommands,
             serverAdminCommands,
             new TeamSpeakCommands(teamSpeakClient),
             ...(playerFeature ? [playerFeature.commands] : []),

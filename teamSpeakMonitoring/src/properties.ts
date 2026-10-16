@@ -97,6 +97,7 @@ export interface TGProperties {
     channelId: string;
     updateTimeoutMs: number;
     rootChatIds: number[];
+    feedbackChatIds: number[];
 }
 
 export interface MonitorProperties {
@@ -397,6 +398,12 @@ const tgConfig = convict<TGProperties>({
         format: "comma-separated-chat-ids",
         default: [],
         env: "TELEGRAM_ROOT_CHAT_IDS",
+    },
+    feedbackChatIds: {
+        doc: "Where /message feedback is delivered, comma-separated chat ids; empty means all root chats",
+        format: "comma-separated-chat-ids",
+        default: [],
+        env: "FEEDBACK_CHAT_ID",
     },
 });
 

@@ -46,7 +46,7 @@ ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
 
 | Группа | Право | Команды | Кнопки |
 |---|---|---|---|
-| **ANONYMOUS** — у всех, в БД не хранится | `ROLE_ANONYMOUS` | `/start`, `/help`, `/whoami` | — |
+| **ANONYMOUS** — у всех, в БД не хранится | `ROLE_ANONYMOUS` | `/start`, `/help`, `/whoami`, `/message`, `/reply` | — |
 | **ROLE_SERVER_USER** — по умолчанию, однократно при первом `/start` | `ROLE_SERVER_LIST` | `/serverlist` | `c:`, `m:` (листать, открыть карточку) |
 | | `ROLE_SERVER_SUBSCRIBE` | `/my` | `k:` (карточка: подписка, проверка, галочки) |
 | | `ROLE_SERVER_STATUS` | `/status`, `/time` | `s:r` |

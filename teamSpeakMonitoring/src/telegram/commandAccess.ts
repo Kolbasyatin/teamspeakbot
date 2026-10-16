@@ -21,6 +21,11 @@ export const COMMAND_ACCESS: Readonly<Record<string, Permission>> = {
     start: "ROLE_ANONYMOUS",
     help: "ROLE_ANONYMOUS",
     whoami: "ROLE_ANONYMOUS",
+    //Обратная связь — всем, даже без ролей: у кого роль отобрали, должен иметь возможность попросить
+    //её назад. От засыпания защищает частота. /reply открыт по той же карте, а пускает его сам
+    //обработчик: ответить можно только на доставленное в этот чат сообщение (FeedbackCommands).
+    message: "ROLE_ANONYMOUS",
+    reply: "ROLE_ANONYMOUS",
 
     serverlist: "ROLE_SERVER_LIST",
     my: "ROLE_SERVER_SUBSCRIBE",

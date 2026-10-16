@@ -112,3 +112,12 @@ test("зависшая отправка не держит очередь", async
     release();
     await hung;
 });
+
+test("sendForId отдаёт id отправленного сообщения", async () => {
+    //По этому id обратная связь находит, на что ответил администратор.
+    const bot = {
+        api: {sendMessage: async () => ({message_id: 4242})},
+    } as unknown as Bot;
+
+    assert.equal(await new TelegramSender(bot).sendForId(1, "текст"), 4242);
+});

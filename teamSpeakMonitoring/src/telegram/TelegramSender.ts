@@ -42,6 +42,17 @@ export class TelegramSender {
         await this.bot.api.sendMessage(chatId, text, {parse_mode: "HTML"});
     }
 
+    //То же, но с id отправленного сообщения: по нему обратная связь находит, на что ответил
+    //администратор. Отдельным методом, а не возвратом из send: send — общий контракт всех
+    //нотифаеров, и id им не нужен.
+    public async sendForId(chatId: number | string, text: string): Promise<number> {
+        await this.waitForSlot();
+
+        const message = await this.bot.api.sendMessage(chatId, text, {parse_mode: "HTML"});
+
+        return message.message_id;
+    }
+
     //Слот занимается синхронно, до любого await: два одновременных вызова обязаны получить
     //разные слоты, а не одинаковый.
     private async waitForSlot(): Promise<void> {
