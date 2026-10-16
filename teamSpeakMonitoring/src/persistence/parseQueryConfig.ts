@@ -1,3 +1,4 @@
+import {validateQueryConfig} from "../monitoring/validateQueryConfig.js";
 import {
     unknownQueryFields,
     type BohemiaQueryConfig,
@@ -45,7 +46,19 @@ export function parseQueryConfig(row: QueryConfigRow): ServerQueryConfig {
         assertHostAddress(query as Partial<BohemiaQueryConfig>, row);
     }
 
-    return query as ServerQueryConfig;
+    //Форма конфига целиком — той же проверкой, что и ввод администратора в боте. Проверки выше
+    //остаются ради их точных сообщений: по ним уже ищут в логах.
+    //Возвращается собранный проверкой конфиг, а не прочитанный объект: лишние ключи из строки
+    //дальше не едут.
+    const validation = validateQueryConfig(query);
+
+    if (!validation.ok) {
+        throw new Error(
+            `Invalid query_config for query source ${row.id} (server ${row.serverId}): ${validation.problems.join("; ")}`,
+        );
+    }
+
+    return validation.config;
 }
 
 //У bohemia-источника единственное собственное поле — адрес, по которому ищется комната.

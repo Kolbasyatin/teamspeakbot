@@ -114,8 +114,12 @@ export function createAccessGuard(access: AccessChecker, logger: Logger): Middle
             return;
         }
 
-        if (!await access.can(chatId, required)) {
-            logger.info({chatId, data: update.data, required}, "Кнопка отклонена: нет прав");
+        //Кнопка правки — по правам нажавшего, как и команда правки: карточку в группе видят все,
+        //а менять по ней может только тот, кому это выдано лично.
+        const subjectId = accessSubject(required) === "user" ? personOf(ctx) : chatId;
+
+        if (subjectId === undefined || !await access.can(subjectId, required)) {
+            logger.info({chatId, userId: ctx.from?.id, data: update.data, required}, "Кнопка отклонена: нет прав");
             await ctx.answerCallbackQuery(DENIED_BUTTON_TEXT);
             return;
         }

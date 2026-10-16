@@ -66,6 +66,28 @@ export interface StatusSource {
     checkServer(serverId: number): Promise<ServerPollResult | undefined>;
 }
 
+//Вид администратора в /serverlist (итерация 14). Обычный список про админку не знает ничего:
+//ни ролей, ни кодов её кнопок — только «положен ли этому чату другой каталог» и как его получить.
+export interface AdminCatalog {
+    //По правам ЧАТА: список читают все, кто в нём есть.
+    canSeeAll(chatId: number): Promise<boolean>;
+
+    page(search: string, limit: number, offset: number): Promise<{
+        servers: CatalogServer[];
+        total: number;
+        //Значок готовности по id сервера.
+        marks: ReadonlyMap<number, string>;
+    }>;
+
+    openButton(serverId: number, origin: ListOrigin): string;
+}
+
+const NO_ADMIN_CATALOG: AdminCatalog = {
+    canSeeAll: async () => false,
+    page: async () => ({servers: [], total: 0, marks: new Map()}),
+    openButton: () => "",
+};
+
 //Команды подписок. Отдельно от TelegramBot намеренно: тот показывает состояние (/time, /who),
 //этот меняет данные и требует совсем других зависимостей. Один Bot на двоих — регистрируют
 //обработчики оба, как и раньше.
@@ -82,6 +104,8 @@ export class SubscriptionCommands implements BotCommands {
         //Подписка меняет список опроса, поэтому монитор надо пересобрать. Что именно это значит,
         //знает composition root — здесь только факт «подписки изменились».
         private readonly onSubscriptionsChanged: () => void,
+        //Без админки — обычный каталог для всех.
+        private readonly adminCatalog: AdminCatalog = NO_ADMIN_CATALOG,
     ) {
     }
 
@@ -326,6 +350,10 @@ export class SubscriptionCommands implements BotCommands {
             };
         }
 
+        if (await this.adminCatalog.canSeeAll(chatId)) {
+            return this.loadAdminPage(page, search, subscribed);
+        }
+
         const total = await this.catalog.countCatalog(search);
         const safePage = clampPage(page, total);
 
@@ -336,6 +364,24 @@ export class SubscriptionCommands implements BotCommands {
             page: safePage,
             total,
             search,
+        };
+    }
+
+    //Тот же каталог, но все серверы, включая черновики и выключенные. Страница вне диапазона
+    //поджимается так же, как в обычном каталоге.
+    private async loadAdminPage(page: number, search: string, subscribed: ReadonlySet<number>): Promise<ServerListPage> {
+        const first = await this.adminCatalog.page(search, PAGE_SIZE, page * PAGE_SIZE);
+        const safePage = clampPage(page, first.total);
+        const listing = safePage === page ? first : await this.adminCatalog.page(search, PAGE_SIZE, safePage * PAGE_SIZE);
+
+        return {
+            view: "catalog",
+            servers: listing.servers,
+            subscribed,
+            page: safePage,
+            total: listing.total,
+            search,
+            admin: {marks: listing.marks, openButton: (serverId, origin) => this.adminCatalog.openButton(serverId, origin)},
         };
     }
 

@@ -193,6 +193,38 @@ test("сервер без включённых источников отдаёт
     assert.deepEqual(servers[0]?.sources, []);
 });
 
+test("непригодный конфиг источника не роняет чтение списка, а откладывается отдельно", async () => {
+    //До итерации 14 исключение из разбора одного источника роняло findMonitored целиком,
+    //а на старте это значило «приложение не поднялось».
+    const broken = await insertMonitoredServerFixture(pool, {
+        name: "Broken source",
+        gameAddress: "127.0.0.1:2001",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17777, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID],
+    });
+    await insertMonitoredServerFixture(pool, {
+        name: "Healthy",
+        gameAddress: "127.0.0.1:2002",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17778, timeout: 1000}}],
+        subscribers: [SUBSCRIBER_CHAT_ID],
+    });
+    //Конфиг без host и port — ровно то, что раньше доезжало до querier'а.
+    await pool.query(
+        `INSERT INTO server_query_sources (server_id, role, priority, query_type, query_config, enabled)
+         VALUES (?, 'secondary', 1, 'a2s', '{"type":"a2s"}', TRUE)`,
+        [broken],
+    );
+
+    const servers = await repository.findMonitored();
+    const brokenServer = servers.find(server => server.id === broken);
+
+    assert.equal(servers.length, 2);
+    assert.equal(brokenServer?.sources.length, 1, "пригодный источник того же сервера остаётся");
+    assert.equal(brokenServer?.invalidSources?.length, 1);
+    assert.match(brokenServer?.invalidSources?.[0]?.reason ?? "", /host/);
+    assert.equal(servers.find(server => server.id !== broken)?.invalidSources, undefined);
+});
+
 test("отписка последнего подписчика убирает сервер из опроса", async () => {
     //Проверяемый результат итерации: список опроса пересобирается из подписок, а не из enabled.
     const serverId = await insertMonitoredServerFixture(pool, {
@@ -228,6 +260,25 @@ test("каталог показывает включённые серверы, �
     const servers = await repository.findCatalogPage("", 10, 0);
 
     assert.deepEqual(servers.map(server => server.name), ["Никто не подписан"]);
+    assert.equal(await repository.countCatalog(""), 1);
+});
+
+test("сервер без включённого источника подписчикам не показывается", async () => {
+    //Итерация 14: черновик (источников ещё нет) и сервер с выключенными источниками видит только
+    //администратор. Подписаться на них можно было бы, а опрашивать нечем — подписка молчала бы.
+    await insertMonitoredServerFixture(pool, {name: "Черновик", gameAddress: "127.0.0.1:2001", sources: []});
+    await insertMonitoredServerFixture(pool, {
+        name: "Источник выключен",
+        gameAddress: "127.0.0.1:2002",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17778, timeout: 1000}, enabled: false}],
+    });
+    await insertMonitoredServerFixture(pool, {
+        name: "Готов",
+        gameAddress: "127.0.0.1:2003",
+        sources: [{query: {type: "a2s", host: "127.0.0.1", port: 17779, timeout: 1000}}],
+    });
+
+    assert.deepEqual((await repository.findCatalogPage("", 10, 0)).map(server => server.name), ["Готов"]);
     assert.equal(await repository.countCatalog(""), 1);
 });
 

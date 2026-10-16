@@ -61,6 +61,13 @@ export interface ServerListPage {
     page: number;
     total: number;
     search: string;
+    //Вид администратора (итерация 14): в каталоге все серверы, у каждого #id и значок готовности,
+    //а нажатие ведёт в админскую карточку. Какие у неё коды кнопок, список не знает — кнопку
+    //собирает тот, кто админку и обрабатывает. Нет поля — обычный вид.
+    admin?: {
+        marks: ReadonlyMap<number, string>;
+        openButton: (serverId: number, origin: ListOrigin) => string;
+    };
 }
 
 //Поисковая строка приходит от человека и уезжает и в SQL LIKE, и в callback_data.
@@ -150,9 +157,11 @@ function renderText(page: ServerListPage): string {
             : "Ты пока ни на что не подписан. Открой /serverlist и выбери серверы.";
     }
 
-    const title = page.view === "catalog"
-        ? `Каталог серверов: ${page.total}`
-        : `Твои подписки: ${page.total}`;
+    const title = page.admin
+        ? `Все серверы (вид администратора): ${page.total}`
+        : page.view === "catalog"
+            ? `Каталог серверов: ${page.total}`
+            : `Твои подписки: ${page.total}`;
 
     const lines = [page.search === "" ? title : `${title} по запросу «${page.search}»`];
     const pages = pageCount(page.total);
@@ -164,9 +173,14 @@ function renderText(page: ServerListPage): string {
     lines.push("");
     //Подсказка обязана совпадать с тем, что реально делает нажатие. В обоих списках это карточка,
     //разница только в том, что в ней человек скорее всего ищет.
-    lines.push(page.view === "catalog"
-        ? "Нажми на сервер — подписаться или посмотреть, что на нём сейчас."
-        : "Нажми на сервер — настроить уведомления, проверить или отписаться.");
+    if (page.admin) {
+        lines.push("Нажми на сервер — карточка администратора. 🟢 готов, ⏸ выключен, 📝 нет источников, ⚠️ нет primary.");
+        lines.push("Новый сервер — /server_add.");
+    } else {
+        lines.push(page.view === "catalog"
+            ? "Нажми на сервер — подписаться или посмотреть, что на нём сейчас."
+            : "Нажми на сервер — настроить уведомления, проверить или отписаться.");
+    }
 
     return lines.join("\n");
 }
@@ -180,19 +194,22 @@ function emptyCatalogText(search: string): string {
 function renderKeyboard(page: ServerListPage): InlineKeyboard {
     const keyboard = new InlineKeyboard();
 
+    const origin: ListOrigin = {view: page.view, page: page.page, search: page.search};
+
     for (const server of page.servers) {
+        if (page.admin) {
+            keyboard
+                .text(`${page.admin.marks.get(server.id) ?? ""} #${server.id} ${server.name}`, page.admin.openButton(server.id, origin))
+                .row();
+            continue;
+        }
+
         //Галочка — подписан. Пустой квадрат, а не плюс: нажатие открывает карточку, а не подписывает,
         //и плюс обещал бы не то.
         const mark = page.subscribed.has(server.id) ? "✅" : "▫️";
 
         keyboard
-            .text(`${mark} ${server.name}`, encodeAction({
-                view: page.view,
-                action: "open",
-                serverId: server.id,
-                page: page.page,
-                search: page.search,
-            }))
+            .text(`${mark} ${server.name}`, encodeAction({...origin, action: "open", serverId: server.id}))
             .row();
     }
 

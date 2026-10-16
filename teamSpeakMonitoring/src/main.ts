@@ -10,6 +10,11 @@ import {ServerRepository} from "./persistence/ServerRepository.js";
 import {SubscriptionRepository} from "./persistence/SubscriptionRepository.js";
 import {PlayerSubscriptionRepository} from "./persistence/PlayerSubscriptionRepository.js";
 import {RoleRepository} from "./persistence/RoleRepository.js";
+import {ServerAdminRepository} from "./persistence/ServerAdminRepository.js";
+import {ServerAdmin} from "./servers/ServerAdmin.js";
+import {checkableServer} from "./servers/ServerAdminModel.js";
+import {ServerAdminCommands} from "./telegram/ServerAdminCommands.js";
+import {AdminCatalogListing} from "./telegram/AdminCatalogListing.js";
 import {AccessControl} from "./access/AccessControl.js";
 import {createPool} from "mariadb";
 import {
@@ -70,6 +75,12 @@ function logBuildNotice(notice: BuildNotice): void {
             log.warn(
                 {serverId: notice.serverId, name: notice.serverName, sourceId: notice.sourceId},
                 "Нет включённого primary-источника — статус определяет самый приоритетный из оставшихся",
+            );
+            return;
+        case "invalidSource":
+            log.warn(
+                {serverId: notice.serverId, name: notice.serverName, sourceId: notice.sourceId, reason: notice.reason},
+                "Источник опроса с непригодным конфигом исключён из опроса",
             );
             return;
         default: {
@@ -182,6 +193,29 @@ async function main(): Promise<any> {
             await telegramBot?.publishChatMenu(chatId, permissions);
         },
     };
+    //Управление серверами из бота (итерация 14). Любая успешная правка пересобирает список опроса;
+    //syncServers пересоздаёт probe только у изменённых серверов. Отказ пересборки не должен
+    //превращать уже сохранённую правку в «ошибку» для администратора — только в лог.
+    const serverAdmin = new ServerAdmin(new ServerAdminRepository(pool), async () => {
+        await syncMonitorServersFromRepository().catch(error => {
+            log.error({error}, "Не удалось пересобрать список опроса после правки серверов");
+        });
+    });
+    const serverAdminCommands = new ServerAdminCommands(serverAdmin, {
+        check: async serverId => {
+            const server = await serverAdmin.server(serverId);
+
+            if (!server) {
+                return undefined;
+            }
+
+            const {configs, notices} = buildMonitorConfigs([checkableServer(server)]);
+
+            notices.forEach(logBuildNotice);
+
+            return configs[0] ? monitor.checkOnce(configs[0]) : undefined;
+        },
+    }, log.child({component: "serverAdmin"}));
     const accessCommands = new AccessCommands(access, subscriptionRepository, chatMenus, log.child({component: "access"}));
 
     if (tgProperties.rootChatIds.length === 0) {
@@ -196,6 +230,7 @@ async function main(): Promise<any> {
     let telegramBot: TelegramBot | undefined = telegramApi
         ? new TelegramBot(telegramApi, [
             accessCommands,
+            serverAdminCommands,
             new TeamSpeakCommands(teamSpeakClient),
             ...(playerFeature ? [playerFeature.commands] : []),
             new SubscriptionCommands(serverRepository, subscriptionRepository, {
@@ -205,7 +240,7 @@ async function main(): Promise<any> {
                 void syncMonitorServersFromRepository().catch(error => {
                     log.error({error}, "Не удалось пересобрать список опроса после изменения подписок");
                 });
-            }),
+            }, new AdminCatalogListing(access, serverAdmin)),
         //child с меткой: строки Telegram отбираются из общего лога одним фильтром (component=telegram).
         ], createAccessGuard(access, log.child({component: "access"})),
         log.child({component: "telegram"}), tgProperties.updateTimeoutMs)

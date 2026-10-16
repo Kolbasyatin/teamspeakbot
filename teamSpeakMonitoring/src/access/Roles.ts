@@ -23,6 +23,11 @@ export const PERMISSIONS = [
     "ROLE_PLAYER_ALIASES",
     "ROLE_PLAYER_DOSSIER",
     "ROLE_ACCESS_MANAGE",
+    //Видеть в /serverlist всё: черновики, выключенные, внутренние id и источники. Проверяется
+    //по ЧАТУ: список читают все, кто в чате, и что показать — зависит от аудитории.
+    "ROLE_SERVER_ADMIN_VIEW",
+    //Заводить, править и удалять серверы и источники. Проверяется по ЧЕЛОВЕКУ, как раздача прав.
+    "ROLE_SERVER_MANAGE",
 ] as const;
 
 export type Permission = typeof PERMISSIONS[number];
@@ -31,6 +36,7 @@ export const ROLE_GROUPS = [
     "ROLE_SERVER_USER",
     "ROLE_PLAYER_USER",
     "ROLE_USER_ADMIN",
+    "ROLE_SERVER_ADMIN",
     "ROLE_ROOT",
 ] as const;
 
@@ -39,8 +45,6 @@ export type RoleGroup = typeof ROLE_GROUPS[number];
 export type Role = Permission | RoleGroup;
 
 //Иерархия. Record: новая группа не скомпилируется, пока ей не дадут состав.
-//ROLE_SERVER_ADMIN появится вместе с первой командой управления серверами — пустая группа
-//сегодня ничего бы не означала.
 export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
     //Роль по умолчанию: выдаётся при первом /start. То, ради чего бот отдаётся в общее пользование.
     ROLE_SERVER_USER: [
@@ -63,9 +67,17 @@ export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
         "ROLE_SERVER_USER",
         "ROLE_ACCESS_MANAGE",
     ],
+    //Управление списком серверов (итерация 14). Два права, а не одно: смотреть без права менять
+    //можно выдать помощнику.
+    ROLE_SERVER_ADMIN: [
+        "ROLE_SERVER_USER",
+        "ROLE_SERVER_ADMIN_VIEW",
+        "ROLE_SERVER_MANAGE",
+    ],
     ROLE_ROOT: [
         "ROLE_PLAYER_USER",
         "ROLE_USER_ADMIN",
+        "ROLE_SERVER_ADMIN",
     ],
 };
 

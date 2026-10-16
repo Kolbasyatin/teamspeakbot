@@ -193,3 +193,26 @@ test("команда раздачи прав без автора (пост ка�
 
     assert.equal(await passes(guard, commandContext("/roles", GROUP)), false);
 });
+
+test("кнопку правки проверяют по нажавшему, а не по чату", async () => {
+    //Карточку в группе видят все участники, а менять по ней может только тот, кому выдано лично.
+    const checker = checkerById({
+        [GROUP]: ["ROLE_SERVER_MANAGE"],
+        [ROOT]: ["ROLE_SERVER_MANAGE"],
+    });
+    const guard = createAccessGuard(checker, silentLogger);
+    const press = (userId: number) => ({
+        ...callbackContext("a:x:14:c:0:", GROUP),
+        from: {id: userId, is_bot: false},
+    }) as unknown as Context;
+
+    assert.equal(await passes(guard, press(ROOT)), true);
+    assert.equal(await passes(guard, press(VASYA)), false, "права группы для правки не в счёт");
+});
+
+test("кнопку просмотра проверяют по чату", async () => {
+    const guard = createAccessGuard(checkerById({[GROUP]: ["ROLE_SERVER_ADMIN_VIEW"]}), silentLogger);
+    const ctx = {...callbackContext("a:o:14:c:0:", GROUP), from: {id: VASYA, is_bot: false}} as unknown as Context;
+
+    assert.equal(await passes(guard, ctx), true);
+});

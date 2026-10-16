@@ -1,5 +1,6 @@
 import type {Permission} from "../access/Roles.js";
 import {CARD_ACTION_PATTERN} from "./ServerCardMessage.js";
+import {ADMIN_MANAGE_PATTERN, ADMIN_VIEW_PATTERN} from "./ServerAdminMessages.js";
 import {LIST_ACTION_PATTERN} from "./ServerListMessage.js";
 import {STATUS_REFRESH} from "./ServerStatusMessage.js";
 import {
@@ -42,6 +43,15 @@ export const COMMAND_ACCESS: Readonly<Record<string, Permission>> = {
     grant: "ROLE_ACCESS_MANAGE",
     revoke: "ROLE_ACCESS_MANAGE",
     roles: "ROLE_ACCESS_MANAGE",
+
+    //Карточка — просмотр (по чату), всё остальное — правка (по человеку).
+    server: "ROLE_SERVER_ADMIN_VIEW",
+    server_add: "ROLE_SERVER_MANAGE",
+    server_edit: "ROLE_SERVER_MANAGE",
+    server_delete: "ROLE_SERVER_MANAGE",
+    source_add: "ROLE_SERVER_MANAGE",
+    source_edit: "ROLE_SERVER_MANAGE",
+    source_delete: "ROLE_SERVER_MANAGE",
 };
 
 //Кнопки — те же шаблоны, по которым их ловят наборы: шаблон один, разъехаться нечему.
@@ -64,17 +74,23 @@ export const CALLBACK_ACCESS: readonly CallbackAccessRule[] = [
     {match: PLAYER_CARD_PATTERN, permission: "ROLE_PLAYER_WHERE"},
     {match: PLAYER_HISTORY_PATTERN, permission: "ROLE_PLAYER_HISTORY"},
     {match: PLAYER_INFO_PATTERN, permission: "ROLE_PLAYER_DOSSIER"},
+    //Админская карточка: открыть и проверить — просмотр, вкл/выкл и удаление — правка.
+    {match: ADMIN_VIEW_PATTERN, permission: "ROLE_SERVER_ADMIN_VIEW"},
+    {match: ADMIN_MANAGE_PATTERN, permission: "ROLE_SERVER_MANAGE"},
 ];
 
-//Чьи права проверять. Обычные команды — по ЧАТУ: выдал роль группе, ею пользуются все участники.
-//Раздача прав — по ЧЕЛОВЕКУ: права раздаёт конкретный человек, и root, набравший /grant в группе
-//ответом на чужое сообщение, должен быть root и там, а остальные участники группы — нет.
+//Чьи права проверять. Правило «видеть — по чату, менять — по человеку».
+//Обычные команды и просмотр — по ЧАТУ: выдал роль группе, ею пользуются все участники, а что
+//показывать, зависит от того, кто это прочтёт.
+//Раздача прав и управление серверами — по ЧЕЛОВЕКУ: их делает конкретный человек, и root,
+//набравший /grant в группе ответом на чужое сообщение, должен быть root и там, а остальные
+//участники группы — нет.
 //Личные права человека — это права его лички с ботом (user_id равен её chat_id), поэтому
 //второго хранилища не нужно. Правило выводится из права, а не из списка команд: новая команда
 //раздачи прав не может случайно начать проверяться по чату.
 export type AccessSubject = "chat" | "user";
 
-const PERSONAL_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>(["ROLE_ACCESS_MANAGE"]);
+const PERSONAL_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>(["ROLE_ACCESS_MANAGE", "ROLE_SERVER_MANAGE"]);
 
 export function accessSubject(permission: Permission): AccessSubject {
     return PERSONAL_PERMISSIONS.has(permission) ? "user" : "chat";

@@ -107,12 +107,22 @@ test("карта проверяется только у rest: a2s её не тр
     });
 });
 
-test("поля внутри конфига не проверяются: {type} без host и port проходит", () => {
-    //Фиксирует дефект п. 5 долга: на входе есть только сверка type, формы конфига никто не проверяет.
-    //Такой сервер доедет до querier'а и упадёт уже там, в опросе.
-    const config = parseQueryConfig(row({queryConfig: '{"type":"a2s"}'}));
+test("форма конфига проверяется целиком: {type} без host и port — ошибка с перечнем проблем", () => {
+    //До итерации 14 этот тест фиксировал дефект п. 5 долга: сверялся только type, и такой конфиг
+    //доезжал до querier'а и падал уже в опросе. Теперь форму проверяет validateQueryConfig.
+    assert.throws(
+        () => parseQueryConfig(row({id: 5, queryConfig: '{"type":"a2s"}'})),
+        /Invalid query_config for query source 5 \(server 100\): host: .*; port: .*; timeout: /,
+    );
+});
 
-    assert.deepEqual(config, {type: "a2s"} as unknown as typeof config);
+test("лишние ключи конфига дальше не едут", () => {
+    //Опечатка вроде "prot" рядом с верным "port" не мешает опросу, но и в домен не попадает.
+    const config = parseQueryConfig(row({
+        queryConfig: '{"type":"a2s","host":"127.0.0.1","port":27015,"timeout":5000,"prot":1}',
+    }));
+
+    assert.deepEqual(config, {type: "a2s", host: "127.0.0.1", port: 27015, timeout: 5_000});
 });
 
 test("bohemia без hostAddress — ошибка с номером источника", () => {

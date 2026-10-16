@@ -1,4 +1,5 @@
 import type {
+    InvalidQuerySource,
     ServerQueryRole,
     ServerQuerySource,
     StoredServer,
@@ -69,12 +70,7 @@ export class ServerRepository {
 
         const sourcesByServer = await this.findEnabledSources();
 
-        return servers.map(server => ({
-            id: Number(server.id),
-            name: server.name,
-            gameAddress: server.gameAddress,
-            sources: sourcesByServer.get(Number(server.id)) ?? [],
-        }));
+        return servers.map(server => toStoredServer(server, sourcesByServer.get(Number(server.id)) ?? []));
     }
 
     //Каталог: страница серверов, из которых человек выбирает, на что подписаться.
@@ -85,15 +81,21 @@ export class ServerRepository {
     //
     //Сортировка по имени, а не по id: человек ищет глазами по названию. id добивает ничью,
     //чтобы страницы не разъезжались при одинаковых именах.
+    //
+    //Сервер без включённого источника подписчику не показывается (итерация 14): подписаться на него
+    //можно, а опрашивать нечем — подписка молчала бы. Такой сервер — черновик или поломка, и его видит
+    //только администратор. Пригодность самого конфига SQL проверить не может: её гарантирует запись
+    //через администрирование, а испорченное руками опрос пропускает с предупреждением.
     public async findCatalogPage(search: string, limit: number, offset: number): Promise<CatalogServer[]> {
         const rows = await this.pool.query<ServerRow[]>(
             `
                 SELECT id,
                        name,
                        game_address AS gameAddress
-                FROM monitored_servers
+                FROM monitored_servers server
                 WHERE enabled = ?
                   AND (? = '' OR name LIKE CONCAT('%', ?, '%'))
+                  AND ${HAS_ENABLED_SOURCE}
                 ORDER BY name, id
                 LIMIT ? OFFSET ?
             `,
@@ -109,9 +111,10 @@ export class ServerRepository {
         const rows = await this.pool.query<CountRow[]>(
             `
                 SELECT COUNT(*) AS total
-                FROM monitored_servers
+                FROM monitored_servers server
                 WHERE enabled = ?
                   AND (? = '' OR name LIKE CONCAT('%', ?, '%'))
+                  AND ${HAS_ENABLED_SOURCE}
             `,
             [true, search, search],
         );
@@ -180,12 +183,7 @@ export class ServerRepository {
             [id, true],
         );
 
-        return {
-            id: Number(server.id),
-            name: server.name,
-            gameAddress: server.gameAddress,
-            sources: sources.map(toQuerySource),
-        };
+        return toStoredServer(server, sources);
     }
 
     //Без ORDER BY по приоритету намеренно: порядок источников — это порядок слияния данных,
@@ -194,7 +192,7 @@ export class ServerRepository {
     //
     //Условия отбора повторяют findMonitored слово в слово, и это не лишнее: источники читаются
     //отдельным запросом, поэтому без них сюда приедут источники серверов, которых в выдаче нет.
-    private async findEnabledSources(): Promise<Map<number, ServerQuerySource[]>> {
+    private async findEnabledSources(): Promise<Map<number, SourceRow[]>> {
         const rows = await this.pool.query<SourceRow[]>(
             `
                 SELECT source.id,
@@ -214,29 +212,54 @@ export class ServerRepository {
             [true, true],
         );
 
-        const byServer = new Map<number, ServerQuerySource[]>();
+        const byServer = new Map<number, SourceRow[]>();
 
         for (const row of rows) {
             const serverId = Number(row.serverId);
-            const sources = byServer.get(serverId) ?? [];
 
-            sources.push(toQuerySource(row));
-
-            byServer.set(serverId, sources);
+            byServer.set(serverId, [...byServer.get(serverId) ?? [], row]);
         }
 
         return byServer;
     }
 }
 
-//Строка источника → доменный источник. Одно место на оба чтения (список опроса и один сервер),
-//чтобы разбор query_config и перевод bigint не разъехались.
-function toQuerySource(row: SourceRow): ServerQuerySource {
+//Отбор каталога: страница и счётчик обязаны отбирать одинаково, иначе «страница 2 из 3» врёт.
+const HAS_ENABLED_SOURCE = `EXISTS (SELECT 1
+                                    FROM server_query_sources source
+                                    WHERE source.server_id = server.id
+                                      AND source.enabled = TRUE)`;
+
+//Строки сервера и его источников → StoredServer. Одно место на оба чтения (список опроса и один
+//сервер), чтобы разбор query_config и перевод bigint не разъехались.
+//
+//Непригодный конфиг не бросается дальше, а откладывается в invalidSources: один испорченный
+//источник не должен ронять чтение всех серверов. Решение «что с ним делать» здесь не принимается —
+//его принимает buildMonitorConfigs. Поле добавляется только когда есть что сказать: «отсутствует —
+//таких нет», как и обещает контракт.
+function toStoredServer(server: ServerRow, rows: readonly SourceRow[]): StoredServer {
+    const sources: ServerQuerySource[] = [];
+    const invalidSources: InvalidQuerySource[] = [];
+
+    for (const row of rows) {
+        try {
+            sources.push({
+                id: Number(row.id),
+                role: row.role,
+                priority: Number(row.priority),
+                query: parseQueryConfig(row),
+            });
+        } catch (error) {
+            invalidSources.push({id: Number(row.id), reason: error instanceof Error ? error.message : String(error)});
+        }
+    }
+
     return {
-        id: Number(row.id),
-        role: row.role,
-        priority: Number(row.priority),
-        query: parseQueryConfig(row),
+        id: Number(server.id),
+        name: server.name,
+        gameAddress: server.gameAddress,
+        sources,
+        ...(invalidSources.length > 0 ? {invalidSources} : {}),
     };
 }
 

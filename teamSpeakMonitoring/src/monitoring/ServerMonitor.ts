@@ -122,10 +122,20 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
             this.probes.delete(serverId)
         }
 
-        //Тут добавляем недостающие
+        //Тут добавляем недостающие и пересоздаём изменённые. Изменённый — значит в базе поправили
+        //сам сервер или его источники: старый probe опрашивал бы по старому конфигу до рестарта.
+        //Пересоздаётся только он, остальные сохраняют статус, failedChecks и таймеры — ради этого
+        //syncServers и существует отдельно от forceSync.
         for (const server of servers) {
-            if (this.probes.has(server.id)) {
+            const existing = this.probes.get(server.id);
+
+            if (existing && sameConfig(existing.getSnapshot().config, server)) {
                 continue;
+            }
+
+            if (existing) {
+                existing.off("online", this.handleProbeOnline);
+                existing.off("offline", this.handleProbeOffline);
             }
 
             const probe = this.createServerProbe(server);
@@ -200,3 +210,9 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     
 }
 
+//Конфиг сравнивается целиком, по содержимому: сборка из базы каждый раз даёт новые объекты,
+//поэтому сравнение по ссылке считало бы изменённым всё. Порядок ключей стабилен: источники
+//сортирует buildMonitorConfigs, а query_config собирает validateQueryConfig.
+function sameConfig(left: ServerMonitorConfig, right: ServerMonitorConfig): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+}

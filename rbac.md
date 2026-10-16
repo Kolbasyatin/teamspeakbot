@@ -59,11 +59,17 @@ ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
 | | `ROLE_PLAYER_ALIASES` | `/aliases` | — |
 | | `ROLE_PLAYER_DOSSIER` | `/playerinfo`, `/steaminfo` | `pi:` |
 | **ROLE_USER_ADMIN** | `ROLE_ACCESS_MANAGE` | `/grant`, `/revoke`, `/roles` | — |
+| **ROLE_SERVER_ADMIN** (итерация 14) | `ROLE_SERVER_ADMIN_VIEW` — по чату | `/server <id>`; `/serverlist` показывает все серверы с `#id` | `a:o`, `a:k` (открыть, проверить) |
+| | `ROLE_SERVER_MANAGE` — по человеку | `/server_add`, `/server_edit`, `/server_delete`, `/source_add`, `/source_edit`, `/source_delete` | `a:e`, `a:d`, `a:x`, `a:y`, `a:se`, `a:sd`, `a:sx` (вкл/выкл, удаление) |
 | **ROLE_ROOT** — из `TELEGRAM_ROOT_CHAT_IDS`, отнять нельзя | всё | | |
 
 `ROLE_SUPER_USER` из первой редакции переименован в `ROLE_PLAYER_USER`: «супер» читалось как
-«почти root». `ROLE_SERVER_ADMIN` не заведён: команд управления серверами пока нет, пустая группа
-ничего бы не значила. Появится вместе с первой такой командой.
+«почти root». `ROLE_SERVER_ADMIN` заведён в итерации 14 вместе с командами управления серверами;
+root получает его через иерархию.
+
+**Правило «видеть — по чату, менять — по человеку».** Просмотр зависит от аудитории: список уходит
+в чат, его читают все. Правка — от того, кто её делает. По человеку проверяются `ROLE_ACCESS_MANAGE`
+и `ROLE_SERVER_MANAGE` — и командами, и кнопками.
 
 ## Единая точка входа
 

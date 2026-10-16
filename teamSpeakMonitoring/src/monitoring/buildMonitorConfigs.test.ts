@@ -108,3 +108,26 @@ test("два включённых primary роняют сборку", () => {
         /Server 1 has 2 enabled primary query sources/,
     );
 });
+
+test("источник с непригодным конфигом даёт предупреждение, остальные опрашиваются", () => {
+    const {configs, notices} = buildMonitorConfigs([{
+        ...storedServer([source(1, "primary", 0)]),
+        invalidSources: [{id: 2, reason: "host: нужен хост"}],
+    }]);
+
+    assert.deepEqual(configs[0]?.sources.map(item => item.id), [1]);
+    assert.deepEqual(notices, [
+        {type: "invalidSource", serverId: 1, serverName: "Server 1", sourceId: 2, reason: "host: нужен хост"},
+    ]);
+});
+
+test("сервер, у которого непригодны все источники, тоже не опрашивается", () => {
+    //Предупреждения два: о непригодном источнике и о том, что опрашивать нечем.
+    const {configs, notices} = buildMonitorConfigs([{
+        ...storedServer([]),
+        invalidSources: [{id: 2, reason: "x"}],
+    }]);
+
+    assert.deepEqual(configs, []);
+    assert.deepEqual(notices.map(notice => notice.type), ["invalidSource", "noEnabledSources"]);
+});

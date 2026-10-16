@@ -129,3 +129,18 @@ test("пустой список подписок зовёт в каталог", 
 function isNav(text: string): boolean {
     return text.includes("◀") || text.includes("▶");
 }
+
+test("вид администратора: #id, значок и кнопка открывают админскую карточку", () => {
+    //Обычный список не знает кодов админских кнопок: кнопку собирает тот, кто её обрабатывает.
+    const {text, keyboard} = renderServerList(page({
+        admin: {
+            marks: new Map([[1, "🟢"], [2, "📝"]]),
+            openButton: (serverId, origin) => `admin:${serverId}:${origin.page}`,
+        },
+    }));
+    const buttons = keyboard.inline_keyboard.flat();
+
+    assert.match(text, /вид администратора/);
+    assert.deepEqual(buttons.map(button => button.text), ["🟢 #1 Первый", "📝 #2 Второй"]);
+    assert.deepEqual(buttons.map(button => "callback_data" in button ? button.callback_data : ""), ["admin:1:0", "admin:2:0"]);
+});

@@ -25,7 +25,10 @@
    наблюдения за игроками здесь нет. Пустой `PLAYERS_API_URL` выключает тему целиком;
 9. **пускает к командам по правам** (RBAC, [`rbac.md`](rbac.md)): каждая команда и кнопка требует права,
    права собраны в группы в коде, назначение «чату выдана роль» — в базе, root — из env. По умолчанию
-   всем — серверы и подписки на них; игроки и раздача прав — по выдаче (`/grant`, `/revoke`, `/roles`).
+   всем — серверы и подписки на них; игроки и раздача прав — по выдаче (`/grant`, `/revoke`, `/roles`);
+10. **управляет списком серверов из самого бота** (итерация 14): `/server_add`, `/source_add`,
+   `/server_edit`, `/source_edit`, удаление и админская карточка; `/serverlist` с правом просмотра
+   показывает все серверы с `#id` и готовностью. SQL руками больше не нужен.
 
 Окружение вокруг приложения (на prod-сервере, в одном compose): MariaDB, TeamSpeak 6 server, `tsbot-monitor`.
 
@@ -65,6 +68,17 @@ teamSpeakMonitoring/         сам сервис
                              grant/revoke с проверкой, роль по умолчанию однократно, сообщение
                              о потерянных правах наружу (PermissionsLostHandler). Здесь же RoleStore
 
+    servers/               ← управление списком серверов (итерация 14). Без Telegram и SQL
+      ServerAdmin.ts         сценарии правки и инварианты опроса: новый сервер — черновик (выключен);
+                             включить — только с включённым пригодным источником; не больше одного
+                             включённого primary (два роняют сборку опроса); у включённого сервера
+                             нельзя убрать последний источник. Проверка — на состоянии «как станет»
+      ServerAdminModel.ts    AdminServer/AdminSource (видно всё, включая непригодное), ServerAdminStore,
+                             readinessOf (готов / выключен / нет источников / нет primary), checkableServer
+      sourceForms.ts         параметры «ключ=значение» → сырой конфиг по типу (Record — новый тип без
+                             формы не скомпилируется); умолчания: хост a2s и hostAddress bohemia
+                             из игрового адреса, timeout 5000
+
     players/               ← наблюдение за игроками: всё общение с соседним сервисом armaplayers
       PlayerObserver.ts      контракт наблюдателя глазами бота (типы + PlayerObserverUnavailable)
       PlayerObserverClient.ts адаптер: HTTP + разбор чужого JSON; типы ответов за пределы файла не выходят
@@ -83,6 +97,9 @@ teamSpeakMonitoring/         сам сервис
       MonitoredServer.ts     StoredServer (контракт хранилища), ServerMonitorConfig,
                              ServerQuerySource, ServerQueryRole
                              + шпаргалка по строкам в monitored_servers/server_query_sources
+      validateQueryConfig.ts полная проверка формы ServerQueryConfig по типу (Record — новый тип без
+                             проверки не скомпилируется). Один источник правды для чтения из БД
+                             и ввода администратора; querier'ов не касается. Закрыл остаток п. 5
       ServerQuery.ts         контракт опроса: ServerQueryConfig (a2s | rest | bohemia), ServerQueryResult
                              (все поля опциональные: players, очередь, сценарий, свежесть),
                              ServerPollResult (alive + info), Querier, QueryFieldMap;
@@ -183,6 +200,14 @@ teamSpeakMonitoring/         сам сервис
       commandAccess.ts       карта «команда → право» и «шаблон кнопки → право». Исчерпывающая:
                              commandAccess.test.ts регистрирует настоящие наборы и падает на любом
                              расхождении и на обработчике мимо command/callbackQuery
+      ServerAdminCommands.ts /server, /server_add, /server_edit, /server_delete, /source_add,
+                             /source_edit, /source_delete и кнопки админской карточки (префикс a:)
+      ServerAdminMessages.ts админская карточка, подтверждение удаления, коды кнопок: два шаблона —
+                             просмотр (ROLE_SERVER_ADMIN_VIEW, по чату) и правка (ROLE_SERVER_MANAGE,
+                             по человеку)
+      ServerAdminInput.ts    разбор «ключ=значение»: значение до следующего ключа, без кавычек
+      AdminCatalogListing.ts админский вид /serverlist: связывает список и админку, не давая им знать
+                             друг о друге (SubscriptionCommands видит только интерфейс AdminCatalog)
       AccessCommands.ts      /start (роль по умолчанию однократно + список команд по правам), /help,
                              /whoami, /grant, /revoke, /roles (обзор; /roles <chat_id> или ответом —
                              роли одного чата с тем, кто и когда выдал). Персональные меню на старте
@@ -226,8 +251,13 @@ teamSpeakMonitoring/         сам сервис
       ServerRepository.ts    findMonitored(): читает monitored_servers + server_query_sources
                              и отдаёт StoredServer[] — только включённые и только те, на которые
                              есть хотя бы одна подписка. Доменных решений не принимает
-                             findCatalogPage/countCatalog/findByIds — каталог для бота: ВСЕ включённые
-                             серверы, в том числе без подписок (иначе подписаться было бы не на что)
+                             findCatalogPage/countCatalog/findByIds — каталог для бота: включённые
+                             серверы с хотя бы одним включённым источником, в том числе без подписок
+                             (иначе подписаться было бы не на что). Черновики видит только админ.
+                             Непригодный query_config не роняет чтение: источник уходит
+                             в StoredServer.invalidSources, buildMonitorConfigs о нём предупреждает
+      ServerAdminRepository.ts  запись серверов и источников и админское чтение (всё, с причиной
+                             непригодности). Правил не держит — их держит servers/ServerAdmin
                              findStoredById — один включённый сервер с источниками, без условия
                              на подписку: для разовой проверки по кнопке
       RoleRepository.ts      назначения ролей (telegram_chat_roles) и пометка однократной выдачи
@@ -369,10 +399,12 @@ teamSpeakMonitoring/         сам сервис
   внешней зависимости обработчиков. Увидеть, что происходит, — `TelegramDiagnostics` (итерация 12a):
   строки с `component=telegram`, в проде на info видны сводка раз в 10 минут, ошибки и тревога
   «Polling Telegram стоит». Подробный поток (каждый `getUpdates` и апдейт) — `LOG_LEVEL=debug`.
-- **`syncServers` vs `forceSync`.** `syncServers` (`POST /internal/reload-servers`) добавляет/удаляет probes,
-  не трогая существующие — их состояние и таймеры сохраняются. `forceSync`
-  (`POST /internal/force-reload-servers`) пересоздаёт все probes — нужен, когда в БД поменялись поля
-  существующей строки. Побочный эффект: состояние теряется, статусы заново проходят через `unknown`.
+- **`syncServers` vs `forceSync`.** `syncServers` (`POST /internal/reload-servers`, любая правка в админке
+  бота, любая подписка) добавляет/удаляет probes и с итерации 14 **пересоздаёт только те, у кого
+  изменился конфиг** (сравнение по содержимому); остальные сохраняют состояние и таймеры. Пересозданный
+  probe опрашивается на следующем тике своего сервера. `forceSync`
+  (`POST /internal/force-reload-servers`) пересоздаёт все probes; после итерации 14 нужен разве что
+  для сброса состояния. Побочный эффект: статусы заново проходят через `unknown`.
 
 ## 4. Границы модулей (что важно не нарушать)
 
@@ -389,6 +421,9 @@ teamSpeakMonitoring/         сам сервис
 | `RoleStore` | `access/AccessControl.ts` | `RoleRepository` | доступ не знает про SQL; роль-строку из базы проверяет сам |
 | `AccessChecker` | `telegram/AccessGuard.ts` | `AccessControl` | стражу нужен один вопрос — `can(chatId, permission)` |
 | `AccessManager`, `ChatMenus` | `telegram/AccessCommands.ts` | `AccessControl`, `TelegramBot` | командам доступа — роли и выдача; меню — по правам, поздним связыванием в `main.ts` |
+| `ServerAdminStore` | `servers/ServerAdminModel.ts` | `ServerAdminRepository` | правила администрирования не знают SQL |
+| `ServerAdministration`, `AdminServerChecker` | `telegram/ServerAdminCommands.ts` | `ServerAdmin`, объект в `main.ts` | команды не знают ни хранилища, ни монитора |
+| `AdminCatalog` | `telegram/SubscriptionCommands.ts` | `AdminCatalogListing` | обычный список не знает ни ролей, ни кодов админских кнопок |
 | `PlayerObserver` | `players/PlayerObserver.ts` | `PlayerObserverClient` | команды и лента не знают, что наблюдатель — это HTTP; отказ соседа приходит как `PlayerObserverUnavailable` |
 | `PlayerSubscriptionStore`, `PlayerEventStore`, `PendingSubscriptionStore` | у своих потребителей (`telegram/PlayerCommands.ts`, `players/*`) | `PlayerSubscriptionRepository` | каждый видит только свои три-четыре вопроса, а не весь репозиторий |
 
@@ -667,6 +702,17 @@ JSON лишил бы проверок. `event_kind` строкой, а не `enu
 
 ### Заведение сервера руками
 
+**С итерации 14 — из бота** (нужна роль `ROLE_SERVER_ADMIN`, у root она есть):
+
+```
+/server_add #1 ARMA-RUSSIAN.RU | 37.48.253.41:2001     → сервер #14, черновик (выключен)
+/source_add 14 a2s port=17771                          → host и timeout из игрового адреса, primary
+/source_add 14 bohemia                                 → hostAddress = игровой адрес, secondary
+/server_edit 14 enabled=on                             → появился в /serverlist у всех
+```
+
+SQL ниже остаётся справкой о схеме и способом починки, если бот недоступен.
+
 ```sql
 INSERT INTO monitored_servers (name, game_address, enabled)
 VALUES ('#1 ARMA-RUSSIAN.RU', '37.48.253.41:2001', TRUE);
@@ -831,10 +877,11 @@ npm run test:repo  # только src/persistence/*.test.ts
    в уведомлениях: контракт (`NotificationEvent`, `Notifier`, `NotificationSubscription`)
    вынесен из `NotificationDispatcher.ts` в `notifications/events.ts`, и нотифаеры больше
    не импортируют файл, названный по диспетчеру.
-5. ✅ **Закрыто, итерация 10.** Каждый querier первой строкой сужает конфиг через
+5. ✅ **Закрыто, итерации 10 и 14.** Каждый querier первой строкой сужает конфиг через
    `narrowQueryConfig(config, "<type>")` и бросает понятную ошибку на чужом типе; каст исчез.
-   Форма конфига по-прежнему проверяется в `parseQueryConfig` только там, где поломка иначе
-   не проявилась бы (карта у `rest`, `hostAddress` у `bohemia`). Исходная запись:
+   С итерации 14 форму конфига целиком проверяет `monitoring/validateQueryConfig.ts` — и при чтении
+   из БД, и при вводе администратора; непригодный источник исключается из опроса с предупреждением,
+   а не роняет чтение всего списка. Исходная запись:
    `queriers/*` делали непроверенный
    `config as A2sQueryConfig` / `as RestQueryConfig`. Дефект начинается раньше — в `parseQueryConfig`:
    там сверяется только `type`, а форма конфига не проверяется, поэтому `{"type":"a2s"}` без `host`

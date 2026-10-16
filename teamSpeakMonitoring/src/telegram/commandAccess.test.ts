@@ -14,6 +14,7 @@ import {
     type SubscriptionStore,
 } from "./SubscriptionCommands.js";
 import type {PlayerObserver} from "../players/PlayerObserver.js";
+import {ServerAdminCommands, type AdminServerChecker, type ServerAdministration} from "./ServerAdminCommands.js";
 import {encodePlayerCard, encodePlayerHistory, encodePlayerInfo, encodePlayerPick, encodePlayerWait} from "./PlayerMessages.js";
 import {silentLogger} from "../test/silentLogger.js";
 
@@ -54,6 +55,11 @@ function allCommandSets(): BotCommands[] {
             {} as unknown as SubscriptionStore,
             {} as unknown as StatusSource,
             () => undefined,
+        ),
+        new ServerAdminCommands(
+            {} as unknown as ServerAdministration,
+            {} as unknown as AdminServerChecker,
+            silentLogger,
         ),
     ];
 }
@@ -160,15 +166,19 @@ test("незнакомая кнопка и незнакомая команда �
     assert.equal(commandPermission("debug"), undefined);
 });
 
-test("раздача прав проверяется по человеку, всё остальное — по чату", () => {
-    //Иначе root не смог бы раздавать права в группе, а группа с правами админа давала бы их
-    //каждому участнику.
-    for (const [command, permission] of Object.entries(COMMAND_ACCESS)) {
-        const expected = permission === "ROLE_ACCESS_MANAGE" ? "user" : "chat";
+test("правка проверяется по человеку, просмотр и обычные команды — по чату", () => {
+    //Правило «видеть — по чату, менять — по человеку». До итерации 14 «по человеку» была только
+    //раздача прав; с управлением серверами к ней добавилась правка списка серверов.
+    //Иначе root не смог бы раздавать права и править серверы в группе, а группа с такими правами
+    //давала бы их каждому участнику.
+    const personal = new Set(["ROLE_ACCESS_MANAGE", "ROLE_SERVER_MANAGE"]);
 
-        assert.equal(accessSubject(permission), expected, `/${command}`);
+    for (const [command, permission] of Object.entries(COMMAND_ACCESS)) {
+        assert.equal(accessSubject(permission), personal.has(permission) ? "user" : "chat", `/${command}`);
     }
 
     assert.equal(accessSubject(COMMAND_ACCESS["grant"] ?? "ROLE_ANONYMOUS"), "user");
+    assert.equal(accessSubject(COMMAND_ACCESS["server_edit"] ?? "ROLE_ANONYMOUS"), "user");
+    assert.equal(accessSubject(COMMAND_ACCESS["server"] ?? "ROLE_ANONYMOUS"), "chat", "просмотр карточки — по чату");
     assert.equal(accessSubject(COMMAND_ACCESS["watch"] ?? "ROLE_ANONYMOUS"), "chat");
 });

@@ -200,6 +200,51 @@ test("syncServers добавляет и удаляет серверы из оп�
     monitor.stop();
 });
 
+test("syncServers пересоздаёт только сервер с изменённым конфигом", async () => {
+    //Правка источника в админке должна дойти до опроса без forceSync, который сбросил бы
+    //состояние всех серверов, а не одного. Пересозданный probe опрашивается на СЛЕДУЮЩЕМ тике:
+    //планировщик берёт задачу по id в момент срабатывания, таймер сервера не сбрасывается.
+    const a2s = createQuerier({players: 1, maxPlayers: 2});
+    const monitor = new ServerMonitor(
+        {...monitorProperties, pollIntervalMs: 30},
+        silentLogger,
+        {a2s, rest: createQuerier(undefined), bohemia: createQuerier(undefined)},
+    );
+    const snapshotOf = (id: number): ServerProbeSnapshot | undefined =>
+        monitor.getSnapshot().find(snapshot => snapshot.config.id === id);
+
+    try {
+        monitor.syncServers([a2sServer(1, "First"), a2sServer(2, "Second")]);
+        monitor.start();
+        await wait(20);
+
+        const unchangedSince = snapshotOf(1)?.statusSince;
+
+        assert.equal(snapshotOf(1)?.status, "online");
+
+        monitor.syncServers([a2sServer(1, "First"), singleSourceServer(2, "Second", "127.0.0.1:2002", {
+            type: "a2s",
+            host: "127.0.0.1",
+            port: 19999,
+            timeout: 1000,
+        })]);
+
+        assert.equal(snapshotOf(2)?.status, "unknown", "изменённый сервер начал с чистого состояния");
+        assert.equal(snapshotOf(1)?.statusSince, unchangedSince, "неизменённый сохранил состояние");
+
+        const callsBefore = a2s.calls.length;
+
+        await wait(60);
+
+        const portsAfter = a2s.calls.slice(callsBefore).map(call => call.type === "a2s" ? call.port : 0);
+
+        assert.ok(portsAfter.includes(19999), "следующий опрос идёт по новому конфигу");
+        assert.ok(!portsAfter.includes(17772), "по старому конфигу больше не опрашивается");
+    } finally {
+        monitor.stop();
+    }
+});
+
 test("checkOnce опрашивает сервер без расписания, probe и событий", async () => {
     //Кнопка «проверить» в боте: сервер никому не подписан, probe у него нет, а ответ нужен
     //тому, кто нажал. Монитор при этом не должен ни запомнить сервер, ни разбудить нотифаеры.

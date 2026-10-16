@@ -18,7 +18,8 @@ import {resolvePrimarySource} from "./resolvePrimarySource.js";
 //Логирует вызывающий — функция про логи не знает и остаётся чистой.
 export type BuildNotice =
     | {type: "noEnabledSources"; serverId: number; serverName: string}
-    | {type: "primaryFallback"; serverId: number; serverName: string; sourceId: number};
+    | {type: "primaryFallback"; serverId: number; serverName: string; sourceId: number}
+    | {type: "invalidSource"; serverId: number; serverName: string; sourceId: number; reason: string};
 
 export interface MonitorConfigsBuild {
     configs: ServerMonitorConfig[];
@@ -30,6 +31,18 @@ export function buildMonitorConfigs(stored: readonly StoredServer[]): MonitorCon
     const notices: BuildNotice[] = [];
 
     for (const server of stored) {
+        //Источник с непригодным конфигом в опрос не идёт, но и молча не пропадает: о нём
+        //предупреждают, иначе «сервер вдруг перестал показывать очередь» было бы не объяснить.
+        for (const invalid of server.invalidSources ?? []) {
+            notices.push({
+                type: "invalidSource",
+                serverId: server.id,
+                serverName: server.name,
+                sourceId: invalid.id,
+                reason: invalid.reason,
+            });
+        }
+
         const sources = sortByPriority(server.sources);
         const primarySource = resolvePrimarySource(sources, server.id);
 
