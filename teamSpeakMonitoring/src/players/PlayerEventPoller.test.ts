@@ -44,6 +44,7 @@ function createObserver(overrides: Partial<PlayerObserver> = {}): PlayerObserver
         playersByIds: async () => [],
         player: async () => undefined,
         sessions: async () => [],
+        queue: async () => [],
         trackedServers: async () => [],
         dossier: async () => null,
         dossierBySteamId: async () => null,

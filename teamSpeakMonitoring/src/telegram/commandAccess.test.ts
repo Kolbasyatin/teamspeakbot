@@ -16,7 +16,7 @@ import {
 import type {PlayerObserver} from "../players/PlayerObserver.js";
 import {ServerAdminCommands, type AdminServerChecker, type ServerAdministration} from "./ServerAdminCommands.js";
 import {FeedbackCommands, type FeedbackSender, type FeedbackStore} from "./FeedbackCommands.js";
-import {encodePlayerCard, encodePlayerHistory, encodePlayerInfo, encodePlayerPick, encodePlayerWait} from "./PlayerMessages.js";
+import {encodePlayerCard, encodePlayerHistory, encodePlayerInfo, encodePlayerPick, encodePlayerQueue, encodePlayerWait} from "./PlayerMessages.js";
 import {silentLogger} from "../test/silentLogger.js";
 
 //Карта прав обязана совпадать с тем, что наборы реально слушают. Расхождение в одну сторону —
@@ -166,6 +166,7 @@ test("кнопки игроков требуют прав своей коман�
     assert.equal(callbackPermission(encodePlayerCard(7)), "ROLE_PLAYER_WHERE");
     assert.equal(callbackPermission(encodePlayerHistory(7)), "ROLE_PLAYER_HISTORY");
     assert.equal(callbackPermission(encodePlayerInfo(7)), "ROLE_PLAYER_DOSSIER");
+    assert.equal(callbackPermission(encodePlayerQueue(7)), "ROLE_PLAYER_QUEUE");
 });
 
 test("незнакомая кнопка и незнакомая команда не получают права", () => {

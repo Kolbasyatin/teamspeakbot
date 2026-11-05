@@ -94,6 +94,24 @@ export interface PlayerSession {
     durationSeconds: number;
 }
 
+//Игрок стоит в очереди сервера — по последнему успешному опросу наблюдателя.
+//
+//Место — оценка наблюдателя, а не данные Bohemia: впереди все, кого он увидел в этой очереди
+//раньше и кто в ней ещё стоит. Пришедшие за один опрос неразличимы, поэтому место — диапазон;
+//positionMin === positionMax означает «точно».
+export interface PlayerQueueEntry {
+    serverId: number;
+    serverName: string;
+    since: Date;
+    //Последний опрос, где игрок был в очереди. Заметно старше минуты — опросы сервера не проходят,
+    //и место надо подписать как устаревшее.
+    observedAt: Date;
+    positionMin: number;
+    positionMax: number;
+    queueSize: number;
+    waitedSeconds: number;
+}
+
 //Всё, что бот спрашивает у наблюдателя. Узкий интерфейс: ни подписок, ни чатов там нет —
 //они наши и живут в нашей БД.
 //Данные Steam об игроке. Поля необязательные не для красоты: закрытый профиль, скрытые игры
@@ -161,6 +179,9 @@ export interface PlayerObserver {
     player(playerId: number): Promise<ObservedPlayer | undefined>;
 
     sessions(playerId: number, limit: number): Promise<PlayerSession[]>;
+
+    //Очереди, где игрок стоит сейчас. Пустой список — не стоит.
+    queue(playerId: number): Promise<PlayerQueueEntry[]>;
 
     trackedServers(): Promise<ObservedServer[]>;
 

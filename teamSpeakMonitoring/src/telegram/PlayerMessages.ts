@@ -1,7 +1,15 @@
 import {formatDuration, intervalToDuration} from "date-fns";
 import {ru} from "date-fns/locale";
 import {InlineKeyboard} from "grammy";
-import type {DossierFriend, ObservedPlayer, PlayerDossier, PlayerEvent, PlayerSession, SteamProfile} from "../players/PlayerObserver.js";
+import type {
+    DossierFriend,
+    ObservedPlayer,
+    PlayerDossier,
+    PlayerEvent,
+    PlayerQueueEntry,
+    PlayerSession,
+    SteamProfile,
+} from "../players/PlayerObserver.js";
 import {escapeHtml} from "./escapeHtml.js";
 
 //Тексты про игроков. Чистые функции, как ServerStatusMessage: данные на входе, текст на выходе,
@@ -69,6 +77,21 @@ export function encodePlayerHistory(playerId: number): string {
 
 export function decodePlayerHistory(data: string): number | undefined {
     const match = PLAYER_HISTORY_PATTERN.exec(data);
+
+    return match?.[1] === undefined ? undefined : Number(match[1]);
+}
+
+//Кнопка «Проверить очередь» под уведомлением «встал в очередь». Формат: pq:<playerId>.
+//Своя метка, а не pc: — у неё своё право (ROLE_PLAYER_QUEUE), а право кнопки определяется
+//по шаблону её данных (commandAccess.ts).
+export const PLAYER_QUEUE_PATTERN = /^pq:(\d+)$/;
+
+export function encodePlayerQueue(playerId: number): string {
+    return `pq:${playerId}`;
+}
+
+export function decodePlayerQueue(data: string): number | undefined {
+    const match = PLAYER_QUEUE_PATTERN.exec(data);
 
     return match?.[1] === undefined ? undefined : Number(match[1]);
 }
@@ -723,8 +746,12 @@ export function renderEvent(event: PlayerEvent): string | undefined {
 
             return `${OFFLINE} ${nickname} вышел с ${server} в ${at}${spent}`;
         }
-        case "PLAYER_ENTERED_QUEUE":
-            return `${QUEUE} ${nickname} встал в очередь на ${server}`;
+        case "PLAYER_ENTERED_QUEUE": {
+            //Места нет у событий, записанных наблюдателем до того, как он научился его считать.
+            const place = queuePlace(event.payload["position_min"], event.payload["position_max"], event.payload["queue_size"]);
+
+            return `${QUEUE} ${nickname} встал в очередь на ${server}${place === undefined ? "" : ` — ${place}`}`;
+        }
         case "PLAYER_LEFT_QUEUE": {
             const waited = event.durationSeconds === undefined
                 ? ""
@@ -752,6 +779,57 @@ export function renderEvent(event: PlayerEvent): string | undefined {
         default:
             return undefined;
     }
+}
+
+//Клавиатура под уведомлением. Отдельно от renderEvent: текст нужен и там, где кнопок нет,
+//а у большинства событий клавиатуры нет вовсе.
+export function renderEventKeyboard(event: PlayerEvent): InlineKeyboard | undefined {
+    return event.type === "PLAYER_ENTERED_QUEUE"
+        ? new InlineKeyboard().text("🕒 Проверить очередь", encodePlayerQueue(event.playerId))
+        : undefined;
+}
+
+//Опрос сервера идёт раз в минуту. Данные старше трёх минут — значит, несколько опросов подряд
+//не прошли, и место могло уже измениться: человек должен это видеть.
+const QUEUE_STALE_MS = 3 * 60_000;
+
+//Ответ на «Проверить очередь». online — где игрок сейчас: из очереди он мог уже зайти на сервер,
+//и это и есть самый интересный ответ.
+export function renderQueueStatus(
+    player: ObservedPlayer,
+    entries: readonly PlayerQueueEntry[],
+    now: Date,
+): string {
+    const nickname = `<b>${escapeHtml(player.currentNickname)}</b>`;
+
+    if (entries.length === 0) {
+        return player.online
+            ? `${ONLINE} ${nickname} уже не в очереди — сейчас на ${escapeHtml(player.online.serverName)}`
+            : `${OFFLINE} ${nickname} сейчас не стоит в очереди`;
+    }
+
+    return entries.map(entry => {
+        const place = queuePlace(entry.positionMin, entry.positionMax, entry.queueSize) ?? "место неизвестно";
+        const line = `${QUEUE} ${nickname} в очереди на ${escapeHtml(entry.serverName)}: ${place}, ждёт ${humanDuration(entry.waitedSeconds)}`;
+        const stale = now.getTime() - entry.observedAt.getTime() > QUEUE_STALE_MS
+            ? `\n(данные ${humanAgo(entry.observedAt, now)} — сервер давно не опрашивался)`
+            : "";
+
+        return line + stale;
+    }).join("\n\n");
+}
+
+//«12-й из 19» или «примерно 12–14-й из 19». Наблюдатель не знает порядка тех, кто встал
+//в очередь за одну минуту, и честно отдаёт диапазон; выдавать его за точное место нельзя.
+//Принимает unknown: из payload события приезжает чужой JSON.
+function queuePlace(min: unknown, max: unknown, size: unknown): string | undefined {
+    if (typeof min !== "number" || typeof max !== "number" || min < 1 || max < min) {
+        return undefined;
+    }
+
+    const of = typeof size === "number" && size >= max ? ` из ${size}` : "";
+
+    return min === max ? `${min}-й${of}` : `примерно ${min}–${max}-й${of}`;
 }
 
 function platformTitle(type: string): string {

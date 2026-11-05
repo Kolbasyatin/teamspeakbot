@@ -58,6 +58,7 @@ ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
 | | `ROLE_PLAYER_HISTORY` | `/history` | `ph:` |
 | | `ROLE_PLAYER_ALIASES` | `/aliases` | — |
 | | `ROLE_PLAYER_DOSSIER` | `/playerinfo`, `/steaminfo` | `pi:` |
+| | `ROLE_PLAYER_QUEUE` | — (команды нет) | `pq:` — «Проверить очередь» под уведомлением «встал в очередь» |
 | **ROLE_USER_ADMIN** | `ROLE_ACCESS_MANAGE` | `/grant`, `/revoke`, `/roles` | — |
 | **ROLE_SERVER_ADMIN** (итерация 14) | `ROLE_SERVER_ADMIN_VIEW` — по чату | `/server <id>`; `/serverlist` показывает все серверы с `#id` | `a:o`, `a:k` (открыть, проверить) |
 | | `ROLE_SERVER_MANAGE` — по человеку | `/server_add`, `/server_edit`, `/server_delete`, `/source_add`, `/source_edit`, `/source_delete` | `a:e`, `a:d`, `a:x`, `a:y`, `a:se`, `a:sd`, `a:sx` (вкл/выкл, удаление) |

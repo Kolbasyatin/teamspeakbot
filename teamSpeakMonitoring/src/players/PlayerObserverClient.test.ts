@@ -89,6 +89,42 @@ test("событие разбирается целиком, время стан�
     assert.equal(page.nextAfter, 42);
 });
 
+test("очередь игрока: место и время разбираются, запись без места пропускается", async () => {
+    const {calls} = stubFetch({
+        body: {
+            queue: [
+                {
+                    server_id: 7,
+                    server_name: "[OG9] Old Guys 9",
+                    since: "2026-11-05T12:00:00Z",
+                    observed_at: "2026-11-05T12:06:00Z",
+                    position_min: 8,
+                    position_max: 9,
+                    queue_size: 15,
+                    waited_seconds: 360,
+                },
+                //Без места ответ «каким он стоит» не получается — такую запись не показываем.
+                {server_id: 8, since: "2026-11-05T12:00:00Z", observed_at: "2026-11-05T12:06:00Z"},
+            ],
+        },
+    });
+
+    const entries = await new PlayerObserverClient(PROPERTIES).queue(42);
+
+    assert.ok(calls[0]?.url.endsWith("/players/42/queue"), calls[0]?.url);
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0], {
+        serverId: 7,
+        serverName: "[OG9] Old Guys 9",
+        since: new Date("2026-11-05T12:00:00Z"),
+        observedAt: new Date("2026-11-05T12:06:00Z"),
+        positionMin: 8,
+        positionMax: 9,
+        queueSize: 15,
+        waitedSeconds: 360,
+    });
+});
+
 test("битые записи пропускаются, а не роняют страницу", async () => {
     //Чужой сервис может измениться раньше нас; из-за одной непонятной строки терять остальные незачем.
     stubFetch({

@@ -1,4 +1,4 @@
-import type {Bot} from "grammy";
+import type {Bot, InlineKeyboard} from "grammy";
 
 //Транспорт: единственное место, которое знает, как отправить текст в Telegram.
 //Ошибку не гасит и не логирует сам — её увидит и залогирует NotificationDispatcher, вместе с именем канала.
@@ -37,9 +37,14 @@ export class TelegramSender {
     //Разметка всегда HTML, как и у ответов на команды (/status, /serverlist): один режим на всё
     //исходящее, чтобы нотифаеры не договаривались с транспортом отдельно. Обратная сторона —
     //каждый, кто подставляет в текст имя сервера, обязан прогнать его через escapeHtml.
-    public async send(chatId: number | string, text: string): Promise<void> {
+    //
+    //Клавиатура необязательна: она нужна лишь уведомлениям про игроков («Проверить очередь»),
+    //нотифаеры статусов серверов её не передают, и контракт MessageSender для них не меняется.
+    public async send(chatId: number | string, text: string, keyboard?: InlineKeyboard): Promise<void> {
         await this.waitForSlot();
-        await this.bot.api.sendMessage(chatId, text, {parse_mode: "HTML"});
+        await this.bot.api.sendMessage(chatId, text, keyboard === undefined
+            ? {parse_mode: "HTML"}
+            : {parse_mode: "HTML", reply_markup: keyboard});
     }
 
     //То же, но с id отправленного сообщения: по нему обратная связь находит, на что ответил

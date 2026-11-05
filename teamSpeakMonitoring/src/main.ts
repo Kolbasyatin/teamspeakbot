@@ -56,7 +56,7 @@ import {buildPlayerFeature, type ChatSender} from "./players/buildPlayerFeature.
 import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
 import {TeamSpeakConnection} from "./teamspeak/TeamSpeakConnection.js";
 import {TeamSpeakClient} from "./teamspeak/TeamSpeakClient.js";
-import {Bot} from "grammy";
+import {Bot, type InlineKeyboard} from "grammy";
 import {retry} from "./retry.js";
 import {buildMonitorConfigs, type BuildNotice} from "./monitoring/buildMonitorConfigs.js";
 import type {ServerMonitorConfig} from "./monitoring/MonitoredServer.js";
@@ -171,8 +171,8 @@ async function main(): Promise<any> {
     //ниже — объект создаётся раньше, а вызывается заведомо позже, уже во время работы.
     //Троттлинг общий: sender у бота один, и лимит Bot API тоже один на бота.
     const chatSender: ChatSender = {
-        send: async (chatId: number, text: string): Promise<void> => {
-            await telegramBot?.sender.send(chatId, text);
+        send: async (chatId: number, text: string, keyboard?: InlineKeyboard): Promise<void> => {
+            await telegramBot?.sender.send(chatId, text, keyboard);
         },
     };
     //Пустой PLAYERS_API_URL или PLAYERS_API_TOKEN выключает тему целиком: ни команд, ни фоновых задач.

@@ -22,6 +22,9 @@ export const PERMISSIONS = [
     "ROLE_PLAYER_HISTORY",
     "ROLE_PLAYER_ALIASES",
     "ROLE_PLAYER_DOSSIER",
+    //«Проверить очередь» под уведомлением «встал в очередь»: каким игрок стоит сейчас.
+    //Команды у права нет, только кнопка — она и есть единственный вход.
+    "ROLE_PLAYER_QUEUE",
     "ROLE_ACCESS_MANAGE",
     //Видеть в /serverlist всё: черновики, выключенные, внутренние id и источники. Проверяется
     //по ЧАТУ: список читают все, кто в чате, и что показать — зависит от аудитории.
@@ -62,6 +65,7 @@ export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
         "ROLE_PLAYER_HISTORY",
         "ROLE_PLAYER_ALIASES",
         "ROLE_PLAYER_DOSSIER",
+        "ROLE_PLAYER_QUEUE",
     ],
     ROLE_USER_ADMIN: [
         "ROLE_SERVER_USER",

@@ -13,16 +13,19 @@ import {
     PLAYER_HISTORY_PATTERN,
     PLAYER_INFO_PATTERN,
     PLAYER_PICK_PATTERN,
+    PLAYER_QUEUE_PATTERN,
     PLAYER_WAIT_PATTERN,
     decodePlayerCard,
     decodePlayerHistory,
     decodePlayerInfo,
     decodePlayerPick,
+    decodePlayerQueue,
     decodePlayerWait,
     renderAliases,
     renderDossier,
     renderMatchNote,
     renderPlayerCard,
+    renderQueueStatus,
     renderSearchResults,
     renderSessions,
     renderSubscriptions,
@@ -164,6 +167,9 @@ export class PlayerCommands implements BotCommands {
         //Кнопки выбора для команд, которые ничего не меняют.
         bot.callbackQuery(PLAYER_CARD_PATTERN, ctx => this.cardByButton(ctx));
         bot.callbackQuery(PLAYER_HISTORY_PATTERN, ctx => this.historyByButton(ctx));
+        //«Проверить очередь» под уведомлением «встал в очередь». Команды у этого действия нет:
+        //спрашивают о нём ровно тогда, когда перед глазами это уведомление.
+        bot.callbackQuery(PLAYER_QUEUE_PATTERN, ctx => this.queueByButton(ctx));
     }
 
     public describe(): BotCommand[] {
@@ -429,6 +435,24 @@ export class PlayerCommands implements BotCommands {
     }
 
     //Общее начало всех кнопок выбора: подтвердить нажатие и достать игрока по id.
+    //Ответ новым сообщением, а не правкой уведомления: уведомление — журнал («встал в очередь
+    //двенадцатым»), а ответ — на вопрос «а сейчас?», и задать его можно несколько раз.
+    private async queueByButton(ctx: Context): Promise<void> {
+        const player = await this.playerFromButton(ctx, decodePlayerQueue(ctx.callbackQuery?.data ?? ""));
+
+        if (!player) {
+            return;
+        }
+
+        const entries = await this.withObserver(ctx, () => this.observer.queue(player.playerId));
+
+        if (!entries) {
+            return;
+        }
+
+        await ctx.reply(renderQueueStatus(player, entries, this.now()), replyOptions(ctx));
+    }
+
     private async playerFromButton(ctx: Context, playerId: number | undefined): Promise<ObservedPlayer | undefined> {
         if (playerId === undefined) {
             await ctx.answerCallbackQuery("Кнопка устарела");

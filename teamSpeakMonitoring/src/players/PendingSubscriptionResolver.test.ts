@@ -58,6 +58,7 @@ function createObserver(result: PlayerSearchResult): PlayerObserver {
         playersByIds: async () => [],
         player: async () => undefined,
         sessions: async () => [],
+        queue: async () => [],
         trackedServers: async () => [],
         dossier: async () => null,
         dossierBySteamId: async () => null,

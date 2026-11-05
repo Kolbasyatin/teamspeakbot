@@ -9,6 +9,7 @@ import {
     type PlayerDossier,
     type PlayerObserver,
     type PlayerPlatform,
+    type PlayerQueueEntry,
     type PlayerSearchResult,
     type PlayerSession,
 } from "./PlayerObserver.js";
@@ -99,6 +100,16 @@ export class PlayerObserverClient implements PlayerObserver {
             const session = parseSession(item);
 
             return session ? [session] : [];
+        });
+    }
+
+    public async queue(playerId: number): Promise<PlayerQueueEntry[]> {
+        const body = await this.get(`/players/${playerId}/queue`);
+
+        return asArray(readField(body, "queue")).flatMap(item => {
+            const entry = parseQueueEntry(item);
+
+            return entry ? [entry] : [];
         });
     }
 
@@ -382,6 +393,31 @@ function parseSession(value: unknown): PlayerSession | undefined {
         endedAt: asDate(readField(value, "ended_at")),
         status: asString(readField(value, "status")) ?? "",
         durationSeconds: asNumber(readField(value, "duration_seconds")) ?? 0,
+    };
+}
+
+//Запись без места или без времени не показывается: «в очереди, место неизвестно» — не ответ
+//на вопрос «каким он стоит».
+function parseQueueEntry(value: unknown): PlayerQueueEntry | undefined {
+    const serverId = asNumber(readField(value, "server_id"));
+    const since = asDate(readField(value, "since"));
+    const observedAt = asDate(readField(value, "observed_at"));
+    const positionMin = asNumber(readField(value, "position_min"));
+    const positionMax = asNumber(readField(value, "position_max"));
+
+    if (serverId === undefined || !since || !observedAt || positionMin === undefined || positionMax === undefined) {
+        return undefined;
+    }
+
+    return {
+        serverId,
+        serverName: asString(readField(value, "server_name")) ?? "",
+        since,
+        observedAt,
+        positionMin,
+        positionMax,
+        queueSize: asNumber(readField(value, "queue_size")) ?? positionMax,
+        waitedSeconds: asNumber(readField(value, "waited_seconds")) ?? 0,
     };
 }
 

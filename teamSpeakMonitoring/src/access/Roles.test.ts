@@ -18,6 +18,7 @@ const PLAYER_PERMISSIONS: readonly Permission[] = [
     "ROLE_PLAYER_HISTORY",
     "ROLE_PLAYER_ALIASES",
     "ROLE_PLAYER_DOSSIER",
+    "ROLE_PLAYER_QUEUE",
 ];
 
 test("группа наследует права вложенной группы транзитивно", () => {

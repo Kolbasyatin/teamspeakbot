@@ -8,6 +8,7 @@ import {
     PLAYER_HISTORY_PATTERN,
     PLAYER_INFO_PATTERN,
     PLAYER_PICK_PATTERN,
+    PLAYER_QUEUE_PATTERN,
     PLAYER_WAIT_PATTERN,
 } from "./PlayerMessages.js";
 
@@ -79,6 +80,8 @@ export const CALLBACK_ACCESS: readonly CallbackAccessRule[] = [
     {match: PLAYER_CARD_PATTERN, permission: "ROLE_PLAYER_WHERE"},
     {match: PLAYER_HISTORY_PATTERN, permission: "ROLE_PLAYER_HISTORY"},
     {match: PLAYER_INFO_PATTERN, permission: "ROLE_PLAYER_DOSSIER"},
+    //Своей команды нет — только кнопка под уведомлением «встал в очередь».
+    {match: PLAYER_QUEUE_PATTERN, permission: "ROLE_PLAYER_QUEUE"},
     //Админская карточка: открыть и проверить — просмотр, вкл/выкл и удаление — правка.
     {match: ADMIN_VIEW_PATTERN, permission: "ROLE_SERVER_ADMIN_VIEW"},
     {match: ADMIN_MANAGE_PATTERN, permission: "ROLE_SERVER_MANAGE"},

@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type {ObservedPlayer, PlayerDossier, PlayerEvent, PlayerSession, SteamProfile} from "../players/PlayerObserver.js";
+import type {ObservedPlayer, PlayerDossier, PlayerEvent, PlayerQueueEntry, PlayerSession, SteamProfile} from "../players/PlayerObserver.js";
 import {
     decodePlayerPick,
+    decodePlayerQueue,
     decodePlayerWait,
     encodePlayerPick,
     encodePlayerWait,
@@ -11,7 +12,9 @@ import {
     renderDossier,
     renderMatchNote,
     renderEvent,
+    renderEventKeyboard,
     renderPlayerCard,
+    renderQueueStatus,
     renderSearchResults,
     renderSessions,
     renderSubscriptions,
@@ -652,4 +655,77 @@ test("досье по игроку не повторяет связку с са�
     const text = renderDossier(dossier({playerId: 42, nickname: "Salat"}), NOW, player({currentNickname: "Salat"}));
 
     assert.doesNotMatch(text, /У нас известен как/);
+});
+
+function queueEntry(overrides: Partial<PlayerQueueEntry> = {}): PlayerQueueEntry {
+    return {
+        serverId: 3,
+        serverName: "[OG9] Old Guys 9",
+        since: new Date("2026-09-11T11:54:00Z"),
+        observedAt: new Date("2026-09-11T11:59:30Z"),
+        positionMin: 8,
+        positionMax: 8,
+        queueSize: 15,
+        waitedSeconds: 360,
+        ...overrides,
+    };
+}
+
+test("встал в очередь: одно место — точно, несколько пришедших сразу — примерно", () => {
+    const exact = renderEvent(event({
+        type: "PLAYER_ENTERED_QUEUE",
+        payload: {position_min: 12, position_max: 12, queue_size: 19},
+    }));
+    const range = renderEvent(event({
+        type: "PLAYER_ENTERED_QUEUE",
+        payload: {position_min: 12, position_max: 14, queue_size: 19},
+    }));
+
+    assert.ok(exact?.endsWith("— 12-й из 19"), exact);
+    assert.ok(!exact?.includes("примерно"), exact);
+    assert.ok(range?.endsWith("— примерно 12–14-й из 19"), range);
+});
+
+test("встал в очередь без места в payload — как раньше, без выдуманного номера", () => {
+    //События, записанные наблюдателем до 05.11.2026, места не несут.
+    const old = renderEvent(event({type: "PLAYER_ENTERED_QUEUE"}));
+    const broken = renderEvent(event({type: "PLAYER_ENTERED_QUEUE", payload: {position_min: "12"}}));
+
+    assert.ok(old?.endsWith("встал в очередь на [RU] #1"), old);
+    assert.ok(broken?.endsWith("встал в очередь на [RU] #1"), broken);
+});
+
+test("кнопка «Проверить очередь» есть только у входа в очередь и ведёт к этому игроку", () => {
+    const keyboard = renderEventKeyboard(event({type: "PLAYER_ENTERED_QUEUE", playerId: 42}));
+    const data = keyboard?.inline_keyboard[0]?.[0];
+
+    assert.ok(data && "callback_data" in data, "у входа в очередь должна быть кнопка");
+    assert.equal(decodePlayerQueue(data.callback_data), 42);
+    assert.equal(renderEventKeyboard(event()), undefined);
+    assert.equal(renderEventKeyboard(event({type: "PLAYER_LEFT_QUEUE"})), undefined);
+});
+
+test("проверка очереди: место, ожидание и честный диапазон", () => {
+    const exact = renderQueueStatus(player(), [queueEntry()], NOW);
+    const range = renderQueueStatus(player(), [queueEntry({positionMin: 8, positionMax: 9})], NOW);
+
+    assert.ok(exact.includes("[OG9] Old Guys 9: 8-й из 15"), exact);
+    assert.ok(exact.includes("ждёт 6 минут"), exact);
+    assert.ok(!exact.includes("давно"), `свежие данные не подписываются как устаревшие: ${exact}`);
+    assert.ok(range.includes("примерно 8–9-й из 15"), range);
+});
+
+test("проверка очереди: устаревшие данные подписаны", () => {
+    //Опросы сервера не проходят — место могло уже измениться, и человек должен это видеть.
+    const text = renderQueueStatus(player(), [queueEntry({observedAt: new Date("2026-09-11T11:50:00Z")})], NOW);
+
+    assert.ok(text.includes("10 минут назад"), text);
+});
+
+test("проверка очереди: вышел из очереди на сервер или ушёл совсем", () => {
+    const joined = renderQueueStatus(player({online: {serverId: 3, serverName: "[OG9] Old Guys 9", since: NOW}}), [], NOW);
+    const gone = renderQueueStatus(player(), [], NOW);
+
+    assert.ok(joined.includes("уже не в очереди — сейчас на [OG9] Old Guys 9"), joined);
+    assert.ok(gone.includes("сейчас не стоит в очереди"), gone);
 });

@@ -1,3 +1,4 @@
+import type {InlineKeyboard} from "grammy";
 import type {Logger} from "pino";
 import type {ScheduledTask} from "../monitoring/Scheduler.js";
 import type {BotCommands} from "../telegram/TelegramBot.js";
@@ -5,7 +6,7 @@ import {PlayerCommands, type ChatRegistry, type PlayerSubscriptionStore} from ".
 import {PlayerEventPoller, type PlayerEventSink, type PlayerEventStore} from "./PlayerEventPoller.js";
 import {PendingSubscriptionResolver, type PendingSubscriptionStore} from "./PendingSubscriptionResolver.js";
 import {PlayerObserverClient} from "./PlayerObserverClient.js";
-import {renderEvent} from "../telegram/PlayerMessages.js";
+import {renderEvent, renderEventKeyboard} from "../telegram/PlayerMessages.js";
 import type {PlayerEvent} from "./PlayerObserver.js";
 
 export interface PlayerFeatureProperties {
@@ -24,10 +25,10 @@ export interface PlayerFeatureProperties {
 //объявлен у своего потребителя.
 export type PlayerStore = PlayerSubscriptionStore & PlayerEventStore & PendingSubscriptionStore;
 
-//Отправка текста в чат. Та же форма, что у MessageSender в TelegramStatusNotifier: про grammy
-//и разметку здесь не знают.
+//Отправка текста в чат. Та же форма, что у MessageSender в TelegramStatusNotifier, плюс
+//необязательная клавиатура: у уведомления «встал в очередь» есть кнопка «Проверить очередь».
 export interface ChatSender {
-    send(chatId: number, text: string): Promise<void>;
+    send(chatId: number, text: string, keyboard?: InlineKeyboard): Promise<void>;
 }
 
 //Всё, что даёт наблюдение за игроками: набор команд для бота и фоновые задачи для планировщика.
@@ -70,7 +71,7 @@ export function buildPlayerFeature(
                 return;
             }
 
-            await sender.send(chatId, text);
+            await sender.send(chatId, text, renderEventKeyboard(event));
         },
     };
 
