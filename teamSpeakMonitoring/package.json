@@ -39,6 +39,7 @@
     "grammy": "^1.42.0",
     "mariadb": "^3.5.2",
     "pino": "^10.3.1",
+    "socks-proxy-agent": "^10.1.0",
     "ssh2": "^1.17.0",
     "ts3-nodejs-library": "^3.5.2"
   }

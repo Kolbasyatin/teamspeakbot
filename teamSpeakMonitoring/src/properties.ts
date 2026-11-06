@@ -98,6 +98,7 @@ export interface TGProperties {
     updateTimeoutMs: number;
     rootChatIds: number[];
     feedbackChatIds: number[];
+    proxyUrl: string;
 }
 
 export interface MonitorProperties {
@@ -386,6 +387,12 @@ const tgConfig = convict<TGProperties>({
         format: String,
         default: "",
         env: "TELEGRAM_CHANNEL_ID",
+    },
+    proxyUrl: {
+        doc: "SOCKS proxy for Telegram; empty means direct connection",
+        format: String,
+        default: "",
+        env: "TELEGRAM_PROXY_URL",
     },
     updateTimeoutMs: {
         doc: "Deadline in milliseconds for handling one Telegram update before polling moves on",

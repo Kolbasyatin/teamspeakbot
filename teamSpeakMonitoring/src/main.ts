@@ -19,6 +19,7 @@ import {FeedbackCommands} from "./telegram/FeedbackCommands.js";
 import {FeedbackRepository} from "./persistence/FeedbackRepository.js";
 import {AccessControl} from "./access/AccessControl.js";
 import {createPool} from "mariadb";
+import {SocksProxyAgent} from "socks-proxy-agent";
 import {
     dbConfig,
     properties,
@@ -164,7 +165,20 @@ async function main(): Promise<any> {
 
     //Telegram доступен только при непустом токене: grammy бросает "Empty token!" в конструкторе.
     //Один Bot на процесс — его делят команды бота и отправка уведомлений.
-    const telegramApi = tgProperties.token ? new Bot(tgProperties.token) : undefined;
+    const telegramApi = tgProperties.token
+        ? new Bot(tgProperties.token, tgProperties.proxyUrl
+            ? {
+                client: {
+                    baseFetchConfig: {
+                        agent: new SocksProxyAgent(tgProperties.proxyUrl, {
+                            timeout: 60_000,
+                        }),
+                        compress: true,
+                    },
+                },
+            }
+            : {})
+        : undefined;
 
     //Наблюдение за игроками (соседний сервис armaplayers). Кольцо: команды нужны боту при сборке,
     //а отправка уведомлений живёт у бота. Разрывается тем же приёмом, что и roundFinishPublisher
