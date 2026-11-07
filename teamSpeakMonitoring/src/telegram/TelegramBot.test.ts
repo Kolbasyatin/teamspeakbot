@@ -91,7 +91,7 @@ test("превью ссылок выключено для всего исход�
 
     new TelegramBot(bot, [], passGuard, silentLogger, 60_000);
 
-    assert.equal(transformers.length, 2, "трансформеры должны ставиться в конструкторе");
+    assert.equal(transformers.length, 3, "трансформеры должны ставиться в конструкторе: диагностика, повтор, превью");
 
     const prev = async (method: string, payload: Record<string, unknown>): Promise<never> => {
         calls.push({method, payload});

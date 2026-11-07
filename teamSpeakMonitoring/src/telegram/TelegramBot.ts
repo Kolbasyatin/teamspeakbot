@@ -5,6 +5,7 @@ import {DEFAULT_PERMISSIONS, type Permission} from "../access/Roles.js";
 import {commandPermission} from "./commandAccess.js";
 import {TelegramSender} from "./TelegramSender.js";
 import {createApiLogger, createUpdateDeadline, createUpdateLogger, PollingWatchdog} from "./TelegramDiagnostics.js";
+import {createUnsentRequestRetry} from "./retryUnsentRequests.js";
 
 //Набор команд: знает, как повесить свои обработчики на бота и как назвать себя в меню.
 //Зависимости у каждого набора свои — командам TeamSpeak нужно соединение, командам подписок
@@ -72,6 +73,10 @@ export class TelegramBot {
         //каждый апдейт до любого набора команд, поэтому замер включает всю обработку.
         //Зачем она вообще — см. TelegramDiagnostics.
         bot.api.config.use(createApiLogger(logger, this.watchdog));
+        //Повтор недошедших запросов — СНАРУЖИ диагностики (трансформер, поставленный позже, оборачивает
+        //поставленные раньше): каждая неудачная попытка остаётся в логе своей строкой.
+        //Что именно повторяется и почему только это — см. retryUnsentRequests.
+        bot.api.config.use(createUnsentRequestRetry(logger));
         bot.use(createUpdateLogger(logger, this.watchdog));
         //Следом — дедлайн: grammy не зовёт следующий getUpdates, пока не отработал обработчик,
         //и один повисший обработчик делал бота глухим до перезапуска контейнера.
