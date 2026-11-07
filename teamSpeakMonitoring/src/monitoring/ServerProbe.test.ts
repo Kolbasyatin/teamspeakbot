@@ -195,3 +195,42 @@ test("в дребезге данные сохраняются: статус ещ
 test("getServerName отдаёт имя из конфигурации", () => {
     assert.equal(createProbe().getServerName(), "Test server");
 });
+
+test("порог из опроса заменяет порог конструктора: две неудачи вместо трёх дают offline", () => {
+    //Так работает режим «ожидается простой»: порог выбирает политика опроса на каждом опросе.
+    const probe = createProbe();
+    const events = recordEvents(probe);
+
+    probe.handleResult(pollSuccess(120));
+    probe.handleResult(pollFailure(), 2);
+    assert.equal(probe.getSnapshot().status, "online", "одна неудача — ещё не падение");
+
+    probe.handleResult(pollFailure(), 2);
+
+    assert.equal(probe.getSnapshot().status, "offline");
+    assert.deepEqual(events, ["online", "offline"]);
+});
+
+test("неудачи, накопленные под обычным порогом, засчитываются под сниженным", () => {
+    //Сервер начал молчать до сигнала, а режим включился посередине: ждать заново две неудачи
+    //незачем, одна уже была.
+    const probe = createProbe();
+
+    probe.handleResult(pollSuccess(120));
+    probe.handleResult(pollFailure());
+    probe.handleResult(pollFailure(), 2);
+
+    assert.equal(probe.getSnapshot().status, "offline");
+});
+
+test("повышенный обратно порог не поднимает лежащий сервер", () => {
+    //Режим кончился, пока сервер лежит: статус offline держится до первого ответа.
+    const probe = createProbe();
+
+    probe.handleResult(pollSuccess(120));
+    failTimes(probe, 1);
+    probe.handleResult(pollFailure(), 2);
+    probe.handleResult(pollFailure());
+
+    assert.equal(probe.getSnapshot().status, "offline");
+});

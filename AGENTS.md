@@ -95,7 +95,11 @@ teamSpeakMonitoring/         сам сервис
                              checkOnce(config) — разовый опрос мимо расписания и probe: тот же
                              pollServerSources, результат возвращается вызывающему, событий нет
       ServerProbe.ts         состояние одного сервера; ServerProbeSnapshot, ServerStatus
-      Scheduler.ts           generic Scheduler<TTask>: per-task setTimeout, sync без сброса таймеров
+      Scheduler.ts           generic Scheduler<TTask>: per-task setTimeout, sync без сброса таймеров;
+                             wake(id) — запустить ждущую задачу сейчас (новый план опроса пришёл снаружи)
+      PollPolicy.ts          чистая функция: состояние сервера → план опроса (интервал, порог offline,
+                             потолок таймаута главного). Режимы СКЛАДЫВАЮТСЯ, берётся самое строгое:
+                             «подозрение» (была неудача) и «ожидается простой» (итерация 18)
       MonitoredServer.ts     StoredServer (контракт хранилища), ServerMonitorConfig,
                              ServerQuerySource, ServerQueryRole
                              + шпаргалка по строкам в monitored_servers/server_query_sources
@@ -125,7 +129,8 @@ teamSpeakMonitoring/         сам сервис
       NotificationDispatcher.ts  раздаёт событие подписанным на его тип
       TeamSpeakChannelNotifier.ts  обновляет описание канала TeamSpeak; здесь же
                              ChannelDescriptionEditor
-      LogNotifier.ts         пишет событие в лог
+      LogNotifier.ts         пишет событие в лог; в выжимке есть failedChecks — тихие неудачи
+                             до порога offline тоже дают строку (итерация 18)
       LatestOnlyNotifier.ts  обёртка «последнее побеждает»: пока доставка идёт, промежуточные
                              события выбрасываются (coalescing)
       StateSync.ts           периодическая публикация текущего состояния: состояние событием
@@ -354,8 +359,20 @@ teamSpeakMonitoring/         сам сервис
   не знает, grace-окно работает как прежде. Висящий запрос на следующем тике не дублируется, а
   ошибка забывается сразу, чтобы повтор был возможен. Интервал — нижняя граница, а не расписание:
   при главном раз в 40 с и пороге 30 с второстепенный опрашивается каждый тик. Ноль выключает.
-- **Адаптивный интервал.** Если `failedChecks > 0` и статус ещё не `offline` — опрос учащается до
-  `MONITOR_SUSPICIOUS_POLL_INTERVAL_MS` (борьба с ложными срабатываниями), иначе `MONITOR_POLL_INTERVAL_MS`.
+- **Политика опроса** (`PollPolicy`, итерация 18). Как опрашивать сервер, решает чистая функция по его
+  состоянию; режимы складываются, из каждого параметра берётся самое строгое:
+  - обычно — `MONITOR_POLL_INTERVAL_MS`, `offline` после `MONITOR_MAX_FAILED_CHECKS` неудач подряд;
+  - **подозрение** — `failedChecks > 0`, статус не `offline`: опрос учащается до
+    `MONITOR_SUSPICIOUS_POLL_INTERVAL_MS`. На деле цикл неудачи определяет таймаут A2S (5 с),
+    а не интервал: ICMP до неудачи не доходит, поэтому обычный путь к `offline` — 25–29 с молчания
+    подряд, и простой короче не виден;
+  - **ожидается простой** — `monitor.watchClosely(id)`, сейчас его вызывает сигнал конца раунда
+    (`main.ts`). Опрос раз в `MONITOR_WATCH_POLL_INTERVAL_MS`, таймаут главного источника не больше
+    `MONITOR_WATCH_TIMEOUT_MS`, `offline` с `MONITOR_WATCH_MAX_FAILED_CHECKS` неудач. Длится
+    `MONITOR_WATCH_DURATION_MS` или до возврата в online. Нужен с игры 1.9: перезапуск стал короче
+    обычного пути к offline (`telegram.md`, §11).
+  Монитор не знает, почему ждут простоя, — основание приходит снаружи. Новый режим — ветка
+  в `PollPolicy.modes`, старые не трогаются.
 - **Дедупликация — у потребителя, не в мониторе.** Монитор эмитит `stateUpdated` после каждого опроса,
   безусловно, и отдаёт сырые снапшоты. Что считать изменением, решает каждый потребитель сам,
   обёрткой `ChangesOnlyNotifier`: описание канала сравнивает **отрендеренный текст без отметки
@@ -497,6 +514,10 @@ teamSpeakMonitoring/         сам сервис
 | `MONITOR_MAX_FAILED_CHECKS` | `5` | сколько неудач до `offline` |
 | `MONITOR_SECONDARY_GRACE_MS` | `1000` | сколько ждать второстепенные источники **после** ответа главного |
 | `MONITOR_SECONDARY_POLL_INTERVAL_MS` | `30000` | не чаще какого интервала опрашивать один второстепенный источник; между опросами берётся его прошлый ответ. `0` — каждый тик |
+| `MONITOR_WATCH_POLL_INTERVAL_MS` | `1000` | режим «ожидается простой» (после сигнала конца раунда): интервал опроса |
+| `MONITOR_WATCH_TIMEOUT_MS` | `1000` | там же: потолок таймаута главного источника. Без него цикл неудачи определял бы таймаут из `query_config` |
+| `MONITOR_WATCH_MAX_FAILED_CHECKS` | `2` | там же: неудач до `offline`. Не 1 — одна потерянная датаграмма не должна давать «упал» |
+| `MONITOR_WATCH_DURATION_MS` | `420000` | сколько длится режим, если сервер не упал и не поднялся раньше |
 | `BOHEMIA_TOKEN_URL` | `""` | `GET /token` соседнего сервиса arma-reforger-hz (в проде `http://arma-reforger-hz:8080/token` через общую docker-сеть). Пусто — источники `bohemia` молчат, остальное работает |
 | `BOHEMIA_TOKEN_TIMEOUT_MS` / `BOHEMIA_TOKEN_REFRESH_LEAD_MS` | `3000` / `60000` | таймаут запроса токена; за сколько до `expiresAt` перезапрашивать |
 | `BOHEMIA_LOBBY_URL` | `…/lobby/rooms/search` | эндпоинт каталога Bohemia |

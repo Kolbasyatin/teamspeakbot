@@ -410,6 +410,15 @@ async function main(): Promise<any> {
         () => Date.now(),
     )));
 
+    //Конец раунда — основание ждать перезапуска: монитор переходит в режим «ожидается простой»
+    //(часто, с коротким таймаутом, offline с двух неудач). Связка здесь, а не в мониторе или
+    //наблюдателе: монитор не знает, что такое раунд, наблюдатель — что такое опрос.
+    //Подписка безусловная, как и сам наблюдатель: от того, включён ли Telegram, она не зависит.
+    //Зачем: после игры 1.9 A2S при перезапуске молчит меньше обычного пути к offline (telegram.md §11).
+    subscriptions.push(subscribe("roundFinish", "monitorWatch", {
+        notify: async (event): Promise<void> => monitor.watchClosely(event.snapshot.config.id),
+    }));
+
     const dispatcher = new NotificationDispatcher(subscriptions, log);
 
     //Периодическая публикация текущего состояния. Часы держит Scheduler, а не монитор и не нотифаер:

@@ -222,3 +222,59 @@ test("сработавший таймер берёт актуальную вер
     assert.equal(original.runs, 1, "старая версия задачи больше не вызывается");
     assert.ok(replacement.runs >= 1, "вызывается новая версия задачи с тем же id");
 });
+
+test("wake запускает ждущую задачу сразу, не дожидаясь её таймера", async () => {
+    const scheduler = new Scheduler<CountingTask>(createLogger().logger);
+    const task = createTask(1);
+
+    scheduler.sync([task]);
+    scheduler.start();
+    await wait(20);
+    assert.equal(task.runs, 1, "первый запуск на старте, дальше таймер на 10 секунд");
+
+    scheduler.wake(1);
+    await wait(20);
+    scheduler.stop();
+
+    assert.equal(task.runs, 2);
+});
+
+test("wake не запускает выполняющуюся задачу второй раз параллельно", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let runs = 0;
+    const scheduler = new Scheduler<ScheduledTask>(createLogger().logger);
+
+    scheduler.sync([{
+        id: 1,
+        run: async (): Promise<void> => {
+            runs += 1;
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await wait(30);
+            active -= 1;
+        },
+        getNextDelayMs: () => NEVER_AGAIN_MS,
+    }]);
+    scheduler.start();
+    await wait(5);
+
+    scheduler.wake(1);
+    await wait(60);
+    scheduler.stop();
+
+    assert.equal(maxActive, 1);
+    assert.equal(runs, 1, "побудка во время выполнения пропускается: следующий план задача спросит сама");
+});
+
+test("wake без start и для незнакомой задачи ничего не делает", async () => {
+    const scheduler = new Scheduler<CountingTask>(createLogger().logger);
+    const task = createTask(1, {delayMs: 5});
+
+    scheduler.sync([task]);
+    scheduler.wake(1);
+    scheduler.wake(99);
+    await wait(20);
+
+    assert.equal(task.runs, 0);
+});

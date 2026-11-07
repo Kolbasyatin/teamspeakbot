@@ -41,7 +41,9 @@ export class ServerProbe extends EventEmitter<ServerProbeEvents> {
         super();
     }
 
-    public handleResult(result: ServerPollResult): void {
+    //Порог offline — параметром опроса, а не только конструктора: его выбирает политика опроса
+    //(PollPolicy), и в режиме «ожидается простой» он ниже обычного. Без параметра — обычный.
+    public handleResult(result: ServerPollResult, maxFailedChecks: number = this.maxFailedChecks): void {
         const previousStatus = this.status;
         //Статус сервера определяется только лишь тем, ответил ли ГЛАВНЫЙ источник. Если да,
         //то сервер точно online. Данные второстепенных источников на статус не влияют:
@@ -49,7 +51,7 @@ export class ServerProbe extends EventEmitter<ServerProbeEvents> {
         if (result.alive) {
             this.statusSuccess(result.info);
         } else {
-            this.statusFailure();
+            this.statusFailure(maxFailedChecks);
         }
 
         this.commitChanges(previousStatus);
@@ -71,12 +73,14 @@ export class ServerProbe extends EventEmitter<ServerProbeEvents> {
         this.lastKnownInfo = result;
     }
 
-    private statusFailure() {
+    private statusFailure(maxFailedChecks: number) {
         //Счётчик нужен только на пути к offline, поэтому ограничен порогом:
         //иначе у давно лежащего сервера он растёт неограниченно и теряет смысл.
-        this.failedChecks = Math.min(this.failedChecks + 1, this.maxFailedChecks);
+        //Порог может смениться между опросами: накопленные под старым порогом неудачи
+        //засчитываются и под новым, поэтому сниженный порог срабатывает сразу.
+        this.failedChecks = Math.min(this.failedChecks + 1, maxFailedChecks);
 
-        if (this.failedChecks >= this.maxFailedChecks) {
+        if (this.failedChecks >= maxFailedChecks) {
             this.status = 'offline';
         }
     }

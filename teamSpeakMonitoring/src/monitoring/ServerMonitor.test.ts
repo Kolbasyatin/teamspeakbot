@@ -18,6 +18,11 @@ const monitorProperties: MonitorProperties = {
     secondaryGraceMs: 50,
     //Троттлинг второстепенных здесь не проверяется — у него свои тесты.
     secondaryPollIntervalMs: 0,
+    //Режим «ожидается простой» — заметно отличными числами, чтобы в тестах было видно, чей план.
+    watchPollIntervalMs: 20,
+    watchTimeoutMs: 300,
+    watchMaxFailedChecks: 2,
+    watchDurationMs: 10_000,
 };
 
 //Сервер с единственным источником: пока опрашивается только главный, остальным тестам монитора
@@ -141,7 +146,7 @@ test("состояние эмитится после каждого опроса
     let updates = 0;
     const monitor = new ServerMonitor(
         //Тут опрос частый: нужно несколько тактов с одинаковым результатом.
-        {pollIntervalMs: 10, suspiciousPollIntervalMs: 10, maxFailedChecks: 3, secondaryGraceMs: 50, secondaryPollIntervalMs: 0},
+        {...monitorProperties, pollIntervalMs: 10, suspiciousPollIntervalMs: 10},
         silentLogger,
         {a2s: createQuerier({players: 5, maxPlayers: 64}), rest: createQuerier(undefined), bohemia: createQuerier(undefined)},
     );
@@ -167,7 +172,7 @@ test("неизвестный тип запроса не мешает опрос�
     );
     const a2s = createQuerier({players: 1, maxPlayers: 2});
     const monitor = new ServerMonitor(
-        {pollIntervalMs: 15, suspiciousPollIntervalMs: 15, maxFailedChecks: 3, secondaryGraceMs: 50, secondaryPollIntervalMs: 0},
+        {...monitorProperties, pollIntervalMs: 15, suspiciousPollIntervalMs: 15},
         silentLogger,
         {a2s, rest: createQuerier(undefined), bohemia: createQuerier(undefined)},
     );
@@ -272,4 +277,135 @@ test("checkOnce честно отдаёт молчание главного ис
     });
 
     assert.deepEqual(await monitor.checkOnce(a2sServer(1, "Silent")), {alive: false, info: {}});
+});
+
+//Режим «ожидается простой» (PollPolicy, telegram.md §11). В monitorProperties обычный опрос —
+//раз в 10 секунд, то есть за окно теста один раз, на старте; всё, что сверх, — заслуга режима.
+
+//Querier, отвечающий по сценарию: i-й вызов — i-й ответ, после конца сценария — последний.
+function scriptedQuerier(script: readonly (ServerQueryResult | undefined)[]): RecordingQuerier {
+    return {
+        calls: [],
+        async query(config: ServerQueryConfig): Promise<ServerQueryResult | undefined> {
+            this.calls.push(config);
+            return script[Math.min(this.calls.length, script.length) - 1];
+        },
+    } as RecordingQuerier;
+}
+
+const ANSWER: ServerQueryResult = {players: 120, maxPlayers: 128};
+
+function watchMonitor(a2s: Querier, bohemia: Querier = createQuerier(undefined), now?: () => number): ServerMonitor {
+    return new ServerMonitor(monitorProperties, silentLogger, {a2s, rest: createQuerier(undefined), bohemia}, now);
+}
+
+test("watchClosely учащает опрос и режет таймаут только главному источнику", async () => {
+    const a2s = createQuerier(ANSWER);
+    const bohemia = createQuerier({queueSize: 3});
+    const monitor = watchMonitor(a2s, bohemia);
+    const primary: ServerQuerySource = {id: 1, role: "primary", priority: 0, query: {
+        type: "a2s", host: "127.0.0.1", port: 17771, timeout: 1000,
+    }};
+    const secondary: ServerQuerySource = {id: 2, role: "secondary", priority: 1, query: {
+        type: "bohemia", hostAddress: "127.0.0.1:2001", timeout: 5000,
+    }};
+
+    try {
+        monitor.syncServers([{id: 1, name: "#1", gameAddress: "127.0.0.1:2001", sources: [primary, secondary], primarySource: primary}]);
+        monitor.start();
+        await wait(30);
+        assert.equal(a2s.calls.length, 1, "до сигнала — обычный опрос, один раз на старте");
+
+        monitor.watchClosely(1);
+        await wait(120);
+    } finally {
+        monitor.stop();
+    }
+
+    assert.ok(a2s.calls.length >= 4, `в режиме опрос частый: ${a2s.calls.length}`);
+    assert.equal(a2s.calls[0]?.timeout, 1000, "до режима таймаут из конфига");
+    assert.ok(a2s.calls.slice(1).every(call => call.timeout === 300), "в режиме — потолок из MONITOR_WATCH_TIMEOUT_MS");
+    assert.ok(bohemia.calls.every(call => call.timeout === 5000), "второстепенному таймаут не режем: статус решает не он");
+});
+
+test("в режиме ожидания две неудачи подряд дают offline", async () => {
+    const offline: ServerProbeSnapshot[] = [];
+    const monitor = watchMonitor(scriptedQuerier([ANSWER, undefined]));
+    monitor.on("serverOffline", snapshot => offline.push(snapshot));
+
+    try {
+        monitor.syncServers([a2sServer(1, "#1")]);
+        monitor.start();
+        await wait(30);
+
+        monitor.watchClosely(1);
+        await wait(80);
+    } finally {
+        monitor.stop();
+    }
+
+    assert.equal(offline.length, 1, "обычный порог — три неудачи по 10 секунд; в режиме хватило двух за десятки мс");
+    assert.equal(offline[0]?.failedChecks, 2);
+});
+
+test("сервер вернулся после падения — режим выключается сам", async () => {
+    const a2s = scriptedQuerier([ANSWER, undefined, undefined, ANSWER]);
+    const monitor = watchMonitor(a2s);
+    const events: string[] = [];
+    monitor.on("serverOffline", () => events.push("offline"));
+    monitor.on("serverOnline", () => events.push("online"));
+
+    try {
+        monitor.syncServers([a2sServer(1, "#1")]);
+        monitor.start();
+        await wait(30);
+
+        monitor.watchClosely(1);
+        await wait(150);
+
+        const callsAfterComeback = a2s.calls.length;
+
+        await wait(80);
+
+        assert.deepEqual(events, ["online", "offline", "online"], "перезапуск пойман: упал и поднялся");
+        assert.equal(a2s.calls.length, callsAfterComeback, "после подъёма — снова обычный опрос, раз в 10 секунд");
+    } finally {
+        monitor.stop();
+    }
+});
+
+test("ожидаемого простоя не случилось — режим кончается по сроку", async () => {
+    let clock = 0;
+    const a2s = createQuerier(ANSWER);
+    const monitor = watchMonitor(a2s, createQuerier(undefined), () => clock);
+
+    try {
+        monitor.syncServers([a2sServer(1, "#1")]);
+        monitor.start();
+        await wait(30);
+
+        monitor.watchClosely(1);
+        await wait(60);
+        assert.ok(a2s.calls.length >= 3, "режим действует");
+
+        clock = monitorProperties.watchDurationMs + 1;
+        //Уже взведённый короткий таймер отработает, а план после него — обычный.
+        await wait(40);
+
+        const callsAfterExpiry = a2s.calls.length;
+
+        await wait(80);
+
+        assert.equal(a2s.calls.length, callsAfterExpiry);
+        assert.equal(monitor.getSnapshot()[0]?.status, "online", "сервер всё это время отвечал");
+    } finally {
+        monitor.stop();
+    }
+});
+
+test("watchClosely по серверу, которого нет в опросе, ничего не делает", () => {
+    const monitor = watchMonitor(createQuerier(ANSWER));
+
+    assert.doesNotThrow(() => monitor.watchClosely(42));
+    assert.deepEqual(monitor.getSnapshot(), []);
 });

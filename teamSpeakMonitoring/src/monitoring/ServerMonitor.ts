@@ -5,6 +5,7 @@ import type {Querier, QuerierRegistry, ServerPollResult, ServerQueryConfig} from
 import {pollServerSources} from "./pollServerSources.js";
 import {SecondarySourceThrottle} from "./SecondarySourceThrottle.js";
 import {type ScheduledTask, Scheduler} from "./Scheduler.js";
+import {planPoll, type PollPlan} from "./PollPolicy.js";
 import {type MonitorProperties} from "../properties.js";
 import type {Logger} from "pino";
 
@@ -37,6 +38,9 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     //Память «когда какой второстепенный источник опрашивался» живёт здесь, потому что живёт
     //столько же, сколько probes: pollServerSources чиста от тика к тику и помнить ничего не может.
     private readonly secondaryThrottle: SecondarySourceThrottle;
+    //Серверы в режиме «ожидается простой»: id → до какого момента. Монитор не знает, ПОЧЕМУ
+    //простой ожидается (сейчас — конец раунда), ему это и не нужно: основание приходит снаружи.
+    private readonly watchedUntil = new Map<number, number>();
 
     public constructor(
         private readonly options: MonitorProperties,
@@ -44,6 +48,8 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         //Реализации опроса приходят из composition root: монитору незачем знать ни про A2S,
         //ни про REST, ни про то, что появится дальше.
         private readonly queriers: QuerierRegistry,
+        //Часы — только для срока режима ожидания; параметром ради тестов.
+        private readonly now: () => number = Date.now,
     ) {
         super();
         this.scheduler = new Scheduler<ScheduledTask>(this.logger);
@@ -56,21 +62,26 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     }
 
     private async pollProbe(probe: ServerProbe): Promise<void> {
-        this.logger.debug(`Poll сервера ${probe.getServerName()} с периодом ${this.getNextPollDelayMs(probe)} мс.`);
+        //План берётся ДО опроса: таймаут нужен запросу, а порог — тому же опросу, что под этим
+        //таймаутом шёл. Включись режим посреди опроса, он подействует со следующего.
+        const plan = this.planFor(probe);
         const config: ServerMonitorConfig = probe.getSnapshot().config;
+        this.logger.debug({plan}, `Poll сервера ${config.name}`);
         //Монитор знает, каким querier'ом опрашивать источник; сколько кого ждать и как сводить
         //ответы — дело pollServerSources; как часто беспокоить второстепенные — троттлинга.
         const result = await pollServerSources(
             config,
             this.secondaryThrottle.wrap(
-                source => this.getQuerier(source.query.type).query(source.query),
+                source => this.getQuerier(source.query.type).query(
+                    source.id === config.primarySource.id ? capTimeout(source.query, plan.timeoutCapMs) : source.query,
+                ),
                 config,
             ),
             this.options.secondaryGraceMs,
             this.logger,
         );
 
-        probe.handleResult(result);
+        probe.handleResult(result, plan.maxFailedChecks);
     }
 
     //Разовый опрос мимо расписания и probe: результат возвращается тому, кто спросил, событий
@@ -85,6 +96,31 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
             this.options.secondaryGraceMs,
             this.logger,
         );
+    }
+
+    //Скоро ожидается простой сервера: опрашивать часто, с коротким таймаутом и подтверждать
+    //падение быстрее (параметры — MONITOR_WATCH_*). Режим живёт watchDurationMs или до тех пор,
+    //пока сервер не вернётся в online. Повторный вызов продлевает срок.
+    //Зачем: после игры 1.9 A2S молчит при перезапуске меньше, чем обычный путь к offline,
+    //и перезапуск перестал быть виден (telegram.md, §11).
+    public watchClosely(serverId: number): void {
+        const probe = this.probes.get(serverId);
+
+        //Сервер не опрашивается — следить нечем. Не ошибка: сигнал мог прийти по серверу,
+        //который только что выпал из опроса.
+        if (!probe) {
+            return;
+        }
+
+        const until = this.now() + this.options.watchDurationMs;
+
+        this.watchedUntil.set(serverId, until);
+        this.logger.info(
+            {serverId, name: probe.getServerName(), until: new Date(until).toISOString()},
+            "Ожидается простой сервера — опрашиваем часто",
+        );
+        //Таймер сервера взведён по обычному плану, до него может быть несколько секунд.
+        this.scheduler.wake(serverId);
     }
 
     public forceSync(servers: ServerMonitorConfig[]) {
@@ -106,6 +142,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         //Синк с шедулером
         this.scheduler.sync(this.getScheduledTasks());
         this.secondaryThrottle.retain(servers);
+        this.retainWatches(servers);
     }
 
     public syncServers(servers: ServerMonitorConfig[]): void {
@@ -148,6 +185,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         //Синк с шедулером
         this.scheduler.sync(this.getScheduledTasks());
         this.secondaryThrottle.retain(servers);
+        this.retainWatches(servers);
     }
 
     public stop(): void {
@@ -159,6 +197,14 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     }
 
     private readonly handleProbeOnline = (event: ServerProbeSnapshot): void => {
+        //Вернулся после падения — простой пойман, ждать больше нечего: обычный режим.
+        if (this.watchedUntil.delete(event.config.id)) {
+            this.logger.info(
+                {serverId: event.config.id, name: event.config.name},
+                "Ожидаемый простой пойман, сервер снова online — обычный опрос",
+            );
+        }
+
         this.emit("serverOnline", event);
     };
 
@@ -178,15 +224,56 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         return querier;
     }
 
-    //Взависимости от статусов, здесь  говорим что если failedChecks случился, то учащаем проверки до секунды
-    // (улучшаем проблему ложного срабатывания)
-    private getNextPollDelayMs(probe: ServerProbe): number {
+    //Как опрашивать этот сервер сейчас — решает политика (PollPolicy), монитор только собирает
+    //для неё состояние. Раньше здесь было одно правило «была неудача — чаще»; теперь это один
+    //из режимов, рядом с которым встают другие.
+    private planFor(probe: ServerProbe): PollPlan {
         const snapshot = probe.getSnapshot();
-        if (snapshot.status !== "offline" && snapshot.failedChecks > 0) {
-            return this.options.suspiciousPollIntervalMs;
+
+        return planPoll({
+            status: snapshot.status,
+            failedChecks: snapshot.failedChecks,
+            watched: this.isWatched(snapshot),
+        }, this.options);
+    }
+
+    //Срок проверяется при чтении, а не своим таймером: план спрашивают на каждом опросе,
+    //и лишний таймер на сервер ничего бы не дал.
+    private isWatched(snapshot: ServerProbeSnapshot): boolean {
+        const {id: serverId, name} = snapshot.config;
+        const until = this.watchedUntil.get(serverId);
+
+        if (until === undefined) {
+            return false;
         }
 
-        return this.options.pollIntervalMs;
+        if (until > this.now()) {
+            return true;
+        }
+
+        this.watchedUntil.delete(serverId);
+        //Два разных исхода, и по логу их надо различать: сервер всё время отвечал (A2S не молчит
+        //при перезапуске — режиму ловить нечего) или упал и так и не поднялся (настоящее падение).
+        this.logger.info(
+            {serverId, name, status: snapshot.status},
+            snapshot.status === "offline"
+                ? "Срок режима ожидания истёк, сервер так и не поднялся — обычный опрос"
+                : "Ожидаемого простоя не случилось за отведённый срок — обычный опрос",
+        );
+
+        return false;
+    }
+
+    //Забыть режим серверов, которых больше нет в опросе: иначе вернувшийся под тем же id сервер
+    //унаследовал бы чужое ожидание.
+    private retainWatches(servers: readonly ServerMonitorConfig[]): void {
+        const ids = new Set(servers.map(server => server.id));
+
+        for (const serverId of this.watchedUntil.keys()) {
+            if (!ids.has(serverId)) {
+                this.watchedUntil.delete(serverId);
+            }
+        }
     }
 
     private getScheduledTasks(): ScheduledTask[] {
@@ -199,7 +286,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
                 this.emit("stateUpdated", this.getSnapshot());
             },
             getNextDelayMs: (): number => {
-                return this.getNextPollDelayMs(probe);
+                return this.planFor(probe).delayMs;
             }
         }))
     }
@@ -208,6 +295,16 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         return new ServerProbe(server, this.options.maxFailedChecks, this.logger);
     }
     
+}
+
+//Таймаут главного источника — не больше потолка из плана. Только уменьшает: источник, которому
+//в конфиге дали меньше, своё и получит. Конфиг копируется, исходный в probe не меняется.
+function capTimeout(query: ServerQueryConfig, capMs: number | undefined): ServerQueryConfig {
+    if (capMs === undefined || query.timeout <= capMs) {
+        return query;
+    }
+
+    return {...query, timeout: capMs};
 }
 
 //Конфиг сравнивается целиком, по содержимому: сборка из базы каждый раз даёт новые объекты,

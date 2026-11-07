@@ -107,6 +107,10 @@ export interface MonitorProperties {
     maxFailedChecks: number;
     secondaryGraceMs: number;
     secondaryPollIntervalMs: number;
+    watchPollIntervalMs: number;
+    watchTimeoutMs: number;
+    watchMaxFailedChecks: number;
+    watchDurationMs: number;
 }
 
 const monitorConfig = convict<MonitorProperties>({
@@ -147,6 +151,40 @@ const monitorConfig = convict<MonitorProperties>({
         format: "nat",
         default: 30_000,
         env: "MONITOR_SECONDARY_POLL_INTERVAL_MS",
+    },
+    //Режим «ожидается простой» (PollPolicy): включается снаружи — сейчас сигналом конца раунда —
+    //и живёт watchDurationMs или до пойманного подъёма после падения. Зачем: после игры 1.9
+    //A2S молчит при перезапуске меньше, чем обычный путь к offline (5 неудач по 5 с таймаута,
+    //~25–29 с), и перезапуск перестал быть виден. Значения — решение zalex 2026-11-07,
+    //см. telegram.md §11.
+    watchPollIntervalMs: {
+        doc: "Poll interval in milliseconds while a downtime is expected",
+        format: "nat",
+        default: 1_000,
+        env: "MONITOR_WATCH_POLL_INTERVAL_MS",
+    },
+    //Потолок таймаута главного источника в режиме: без него цикл неудачи определял бы таймаут
+    //из query_config (5 с), а не интервал выше.
+    watchTimeoutMs: {
+        doc: "Timeout cap in milliseconds for the primary source while a downtime is expected",
+        format: "nat",
+        default: 1_000,
+        env: "MONITOR_WATCH_TIMEOUT_MS",
+    },
+    //2, а не 1: одна потерянная UDP-датаграмма не должна давать «упал».
+    watchMaxFailedChecks: {
+        doc: "Failed checks before offline while a downtime is expected",
+        format: "nat",
+        default: 2,
+        env: "MONITOR_WATCH_MAX_FAILED_CHECKS",
+    },
+    //Запас от сигнала конца раунда до перезапуска — 79…106 с, простой в каталоге — до ~110 с.
+    //Семь минут покрывают и то и другое с запасом на затянувшийся раунд.
+    watchDurationMs: {
+        doc: "How long the expected-downtime mode lasts unless the server comes back earlier",
+        format: "nat",
+        default: 420_000,
+        env: "MONITOR_WATCH_DURATION_MS",
     },
 });
 
