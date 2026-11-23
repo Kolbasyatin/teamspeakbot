@@ -45,6 +45,17 @@ export class ChatDirectoryRepository implements ChatDirectory {
     //(миграция 009 вставила много чатов одним моментом) и листание не теряло и не повторяло строки.
     //Роли — GROUP_CONCAT по LEFT JOIN, подписки — подзапросом: JOIN по подпискам размножил бы роли.
     public async findChatPage(limit: number, offset: number): Promise<ChatListEntry[]> {
+        return this.queryChats("", "LIMIT ? OFFSET ?", [limit, offset]);
+    }
+
+    public async findChat(chatId: number): Promise<ChatListEntry | undefined> {
+        const [chat] = await this.queryChats("WHERE chat.chat_id = ?", "", [chatId]);
+
+        return chat;
+    }
+
+    //Отбор и предел подставляются готовыми строками из двух методов выше, значения — только параметрами.
+    private async queryChats(where: string, limit: string, parameters: unknown[]): Promise<ChatListEntry[]> {
         const rows = await this.pool.query<ChatRow[]>(
             `
                 SELECT chat.chat_id                                        AS chatId,
@@ -57,11 +68,12 @@ export class ChatDirectoryRepository implements ChatDirectory {
                         WHERE subscription.chat_id = chat.chat_id)         AS subscriptions
                 FROM telegram_chats chat
                          LEFT JOIN telegram_chat_roles role ON role.chat_id = chat.chat_id
+                ${where}
                 GROUP BY chat.chat_id, chat.type, chat.title, chat.created_at
                 ORDER BY chat.created_at DESC, chat.chat_id DESC
-                LIMIT ? OFFSET ?
+                ${limit}
             `,
-            [limit, offset],
+            parameters,
         );
 
         return rows.map(row => ({

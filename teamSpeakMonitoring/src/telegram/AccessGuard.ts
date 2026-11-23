@@ -2,6 +2,7 @@ import type {Context, MiddlewareFn} from "grammy";
 import type {Logger} from "pino";
 import type {Permission} from "../access/Roles.js";
 import {accessSubject, callbackPermission, commandPermission} from "./commandAccess.js";
+import type {CommandRecorder} from "./CommandJournal.js";
 
 //Стражу нужен один вопрос — «можно ли этому чату вот это». Весь AccessControl ему знать незачем.
 export interface AccessChecker {
@@ -67,6 +68,19 @@ export function personOf(ctx: Context): number | undefined {
     return from.id;
 }
 
+//Текст после команды: «/watch Zalex» → «Zalex». Для журнала команд, не для обработчиков —
+//те берут аргументы у grammy (ctx.match).
+export function commandArguments(ctx: Context): string | undefined {
+    const message = ctx.message ?? ctx.channelPost;
+    const text = message?.text ?? message?.caption;
+    const entity = (message?.entities ?? message?.caption_entities ?? [])
+        .find(item => item.type === "bot_command" && item.offset === 0);
+
+    const rest = text !== undefined && entity !== undefined ? text.slice(entity.length).trim() : "";
+
+    return rest === "" ? undefined : rest;
+}
+
 //Единственная точка проверки прав для всего входящего. Ставится ПЕРЕД всеми наборами команд
 //одним экземпляром: в grammy middleware, не вызвавший next(), останавливает апдейт целиком,
 //поэтому страж на каждом наборе отдельно перекрыл бы команды всех следующих.
@@ -74,7 +88,15 @@ export function personOf(ctx: Context): number | undefined {
 //Fail closed по всем осям: дальше проходит только то, что есть в карте и разрешено. Команда,
 //которой нет в карте, кнопка с незнакомыми данными, любой другой апдейт — не проходят.
 //Поэтому новый обработчик, забытый в карте, не работает вовсе, а не работает открытым.
-export function createAccessGuard(access: AccessChecker, logger: Logger): MiddlewareFn<Context> {
+//
+//Здесь же пишется журнал команд (итерация 23): страж — единственное место, которое видит каждую
+//нашу команду и кнопку вместе с решением. Записывается и отказ, и незнакомая команда. Апдейты
+//не для нас (обычный текст, команда другому боту) не пишутся.
+export function createAccessGuard(
+    access: AccessChecker,
+    logger: Logger,
+    recorder?: CommandRecorder,
+): MiddlewareFn<Context> {
     return async (ctx, next) => {
         const update = classifyUpdate(ctx);
 
@@ -86,10 +108,24 @@ export function createAccessGuard(access: AccessChecker, logger: Logger): Middle
 
         if (update.kind === "command") {
             const required = commandPermission(update.command);
+            const journal = (allowed: boolean): void => {
+                if (chatId !== undefined) {
+                    recorder?.record({
+                        chatId,
+                        userId: ctx.from?.id,
+                        kind: "command",
+                        name: update.command,
+                        arguments: commandArguments(ctx),
+                        permission: required,
+                        allowed,
+                    });
+                }
+            };
 
             //Незнакомая команда — молчим, как молчал бот и раньше: в группе отвечать на каждую
             //чужую или ошибочную команду значит засорять чат.
             if (required === undefined || chatId === undefined) {
+                journal(false);
                 return;
             }
 
@@ -97,19 +133,35 @@ export function createAccessGuard(access: AccessChecker, logger: Logger): Middle
 
             if (subjectId === undefined || !await access.can(subjectId, required)) {
                 logger.info({chatId, userId: ctx.from?.id, command: update.command, required}, "Команда отклонена: нет прав");
+                journal(false);
                 await ctx.reply(DENIED_TEXT);
                 return;
             }
 
+            journal(true);
             await next();
             return;
         }
 
         const required = callbackPermission(update.data);
+        const journal = (allowed: boolean): void => {
+            if (chatId !== undefined) {
+                recorder?.record({
+                    chatId,
+                    userId: ctx.from?.id,
+                    kind: "button",
+                    name: update.data,
+                    arguments: undefined,
+                    permission: required,
+                    allowed,
+                });
+            }
+        };
 
         //Кнопку надо подтвердить в любом случае: без answerCallbackQuery Telegram держит
         //индикатор загрузки около тридцати секунд, и это выглядит как зависший бот.
         if (required === undefined || chatId === undefined) {
+            journal(false);
             await ctx.answerCallbackQuery(OUTDATED_BUTTON_TEXT);
             return;
         }
@@ -120,10 +172,12 @@ export function createAccessGuard(access: AccessChecker, logger: Logger): Middle
 
         if (subjectId === undefined || !await access.can(subjectId, required)) {
             logger.info({chatId, userId: ctx.from?.id, data: update.data, required}, "Кнопка отклонена: нет прав");
+            journal(false);
             await ctx.answerCallbackQuery(DENIED_BUTTON_TEXT);
             return;
         }
 
+        journal(true);
         await next();
     };
 }

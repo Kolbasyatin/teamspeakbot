@@ -4,13 +4,21 @@ import type {Logger} from "pino";
 import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat, TelegramChatType} from "./TelegramChat.js";
 import {
+    FEEDBACK_PAGE_PATTERN,
+    FEEDBACK_PAGE_SIZE,
     FEEDBACK_REFUSAL_TEXT,
     FEEDBACK_WINDOW_SECONDS,
+    decodeFeedbackPage,
+    encodeFeedbackPage,
+    feedbackPageCount,
     feedbackRefusal,
     renderDelivery,
+    renderFeedbackList,
     renderReply,
     type FeedbackAuthor,
+    type FeedbackThread,
 } from "./FeedbackMessages.js";
+import {pagingKeyboard} from "./pagingKeyboard.js";
 
 export interface NewFeedback {
     chatId: number;
@@ -25,9 +33,24 @@ export interface StoredFeedback {
     text: string;
 }
 
+//Ответ администратора, как он сохраняется (итерация 23).
+export interface NewFeedbackReply {
+    feedbackId: number;
+    adminChatId: number;
+    adminUserId: number | undefined;
+    text: string;
+    delivered: boolean;
+}
+
 //Хранилище обратной связи глазами команд.
 export interface FeedbackStore {
     save(feedback: NewFeedback): Promise<number>;
+
+    addReply(reply: NewFeedbackReply): Promise<void>;
+
+    countFeedback(): Promise<number>;
+
+    findFeedbackPage(limit: number, offset: number): Promise<FeedbackThread[]>;
 
     countRecent(chatId: number, windowSeconds: number): Promise<number>;
 
@@ -74,6 +97,31 @@ export class FeedbackCommands implements BotCommands {
     public register(bot: Composer<Context>): void {
         bot.command("message", ctx => this.submit(ctx, textOf(ctx)));
         bot.command("reply", ctx => this.reply(ctx, textOf(ctx)));
+        //Вся переписка: обращения и ответы (итерация 23). Право ROLE_FEEDBACK_VIEW — только root.
+        bot.command("feedback", ctx => this.showFeedback(ctx, 0, "reply"));
+        bot.callbackQuery(FEEDBACK_PAGE_PATTERN, async ctx => {
+            await ctx.answerCallbackQuery();
+            await this.showFeedback(ctx, decodeFeedbackPage(ctx.callbackQuery.data) ?? 0, "edit");
+        });
+    }
+
+    private async showFeedback(ctx: Context, requestedPage: number, how: "reply" | "edit"): Promise<void> {
+        const total = await this.store.countFeedback();
+        const page = Math.min(Math.max(requestedPage, 0), feedbackPageCount(total) - 1);
+        const threads = await this.store.findFeedbackPage(FEEDBACK_PAGE_SIZE, page * FEEDBACK_PAGE_SIZE);
+        const {text, pages} = renderFeedbackList(threads, total, page);
+        const keyboard = pagingKeyboard(page, pages, encodeFeedbackPage);
+        const options = {parse_mode: "HTML" as const, ...(keyboard ? {reply_markup: keyboard} : {})};
+
+        if (how === "reply") {
+            await ctx.reply(text, options);
+            return;
+        }
+
+        //При неизменившемся тексте Telegram отвечает отказом — это не ошибка.
+        await ctx.editMessageText(text, options).catch((error: unknown) => {
+            this.logger.debug({error}, "Не удалось перелистнуть обратную связь");
+        });
     }
 
     private async submit(ctx: Context, text: string): Promise<void> {
@@ -157,11 +205,29 @@ export class FeedbackCommands implements BotCommands {
             return;
         }
 
+        let delivered = true;
+
         try {
             await this.sender.send(feedback.chatId, renderReply(feedback.text, text.trim()));
         } catch (error) {
+            delivered = false;
             this.logger.warn({error, feedbackId: feedback.id}, "Ответ на обратную связь не доставлен");
-            await ctx.reply("Не доставлено: автор, похоже, заблокировал бота или удалил чат.");
+        }
+
+        //Ответ сохраняется и недоставленным: попытка ответить — тоже часть переписки. Отказ записи
+        //не отменяет уже отправленного — только в лог.
+        await this.store.addReply({
+            feedbackId: feedback.id,
+            adminChatId: chatId,
+            adminUserId: ctx.from?.id,
+            text: text.trim(),
+            delivered,
+        }).catch((error: unknown) => {
+            this.logger.error({error, feedbackId: feedback.id}, "Не удалось сохранить ответ на обратную связь");
+        });
+
+        if (!delivered) {
+            await ctx.reply("Не доставлено: автор, похоже, заблокировал бота или удалил чат. Ответ сохранён.");
             return;
         }
 

@@ -55,6 +55,8 @@ import {SubscriptionCommands} from "./telegram/SubscriptionCommands.js";
 import {AccessCommands, type ChatMenus} from "./telegram/AccessCommands.js";
 import {ChatListCommands} from "./telegram/ChatListCommands.js";
 import {ChatDirectoryRepository} from "./persistence/ChatDirectoryRepository.js";
+import {ChatHistoryRepository} from "./persistence/ChatHistoryRepository.js";
+import {CommandJournal} from "./telegram/CommandJournal.js";
 import {createAccessGuard} from "./telegram/AccessGuard.js";
 import {buildPlayerFeature, type ChatSender} from "./players/buildPlayerFeature.js";
 import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
@@ -269,6 +271,8 @@ async function main(): Promise<any> {
         log.child({component: "feedback"}),
     );
     const accessCommands = new AccessCommands(access, subscriptionRepository, chatMenus, log.child({component: "access"}));
+    //Журнал команд и история чата (итерация 23): пишет страж прав, читает /chats <chat_id>.
+    const chatHistory = new ChatHistoryRepository(pool);
 
     if (tgProperties.rootChatIds.length === 0) {
         log.warn("TELEGRAM_ROOT_CHAT_IDS пуст — раздавать права некому, команды про игроков недоступны никому");
@@ -282,7 +286,7 @@ async function main(): Promise<any> {
     let telegramBot: TelegramBot | undefined = telegramApi
         ? new TelegramBot(telegramApi, [
             accessCommands,
-            new ChatListCommands(new ChatDirectoryRepository(pool), access, log.child({component: "access"})),
+            new ChatListCommands(new ChatDirectoryRepository(pool), chatHistory, access, log.child({component: "access"})),
             feedbackCommands,
             serverAdminCommands,
             new TeamSpeakCommands(teamSpeakClient),
@@ -296,7 +300,7 @@ async function main(): Promise<any> {
                 });
             }, new AdminCatalogListing(access, serverAdmin)),
         //child с меткой: строки Telegram отбираются из общего лога одним фильтром (component=telegram).
-        ], createAccessGuard(access, log.child({component: "access"})),
+        ], createAccessGuard(access, log.child({component: "access"}), new CommandJournal(chatHistory, log.child({component: "access"}))),
         log.child({component: "telegram"}), tgProperties.updateTimeoutMs)
         : undefined;
 

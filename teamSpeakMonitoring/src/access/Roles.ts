@@ -34,6 +34,8 @@ export const PERMISSIONS = [
     //Список всех чатов, писавших боту (/chats): личные имена и роли. Только у root, остальным —
     //поштучной выдачей. По чату, как любой просмотр: выданное группе увидят все её участники.
     "ROLE_CHAT_LIST",
+    //Вся обратная связь с ответами (/feedback). Только у root, как и список чатов: чужая переписка.
+    "ROLE_FEEDBACK_VIEW",
 ] as const;
 
 export type Permission = typeof PERMISSIONS[number];
@@ -92,6 +94,7 @@ export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
         "ROLE_PLAYER_USER",
         "ROLE_TS_USER",
         "ROLE_CHAT_LIST",
+        "ROLE_FEEDBACK_VIEW",
         "ROLE_USER_ADMIN",
         "ROLE_SERVER_ADMIN",
     ],

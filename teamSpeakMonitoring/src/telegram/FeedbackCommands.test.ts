@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type {Composer, Context} from "grammy";
-import {FeedbackCommands, type FeedbackStore, type NewFeedback, type StoredFeedback} from "./FeedbackCommands.js";
+import {FeedbackCommands, type FeedbackStore, type NewFeedback, type NewFeedbackReply, type StoredFeedback} from "./FeedbackCommands.js";
+import type {FeedbackThread} from "./FeedbackMessages.js";
 import {FEEDBACK_LIMIT} from "./FeedbackMessages.js";
 import {silentLogger} from "../test/silentLogger.js";
 
@@ -11,6 +12,31 @@ import {silentLogger} from "../test/silentLogger.js";
 class MemoryFeedbackStore implements FeedbackStore {
     public readonly saved: (NewFeedback & {id: number})[] = [];
     public readonly deliveries: {feedbackId: number; adminChatId: number; adminMessageId: number}[] = [];
+    public readonly replies: NewFeedbackReply[] = [];
+
+    public async addReply(reply: NewFeedbackReply): Promise<void> {
+        this.replies.push(reply);
+    }
+
+    public async countFeedback(): Promise<number> {
+        return this.saved.length;
+    }
+
+    public async findFeedbackPage(limit: number, offset: number): Promise<FeedbackThread[]> {
+        return [...this.saved].reverse().slice(offset, offset + limit).map(item => ({
+            id: item.id,
+            chatId: item.chatId,
+            author: item.author,
+            text: item.text,
+            createdAt: new Date("2026-11-24T12:00:00Z"),
+            replies: this.replies.filter(reply => reply.feedbackId === item.id).map(reply => ({
+                text: reply.text,
+                createdAt: new Date("2026-11-24T12:05:00Z"),
+                delivered: reply.delivered,
+                adminUserId: reply.adminUserId,
+            })),
+        }));
+    }
 
     public async save(feedback: NewFeedback): Promise<number> {
         const id = this.saved.length + 1;
@@ -59,6 +85,7 @@ function setup(recipients: number[], failFor: number[] = []) {
 
     commands.register({
         command: (name: string, handler: (ctx: Context) => Promise<void>) => handlers.set(name, handler),
+        callbackQuery: () => undefined,
     } as unknown as Composer<Context>);
 
     //Ответы бота в чат, где набрана команда.
@@ -140,6 +167,15 @@ test("ответ ответом на доставленное уходит ав�
     assert.equal(replies.at(-1), "Ответ на #1 отправлен.");
 });
 
+test("ответ сохраняется вместе с обращением: кто, откуда, текст, дошёл ли", async () => {
+    const {store, run} = setup([ROOT_A]);
+
+    await run("message", AUTHOR, "Добавьте EXD #3");
+    await run("reply", ROOT_A, "Добавили", 1_000);
+
+    assert.deepEqual(store.replies, [{feedbackId: 1, adminChatId: ROOT_A, adminUserId: ROOT_A, text: "Добавили", delivered: true}]);
+});
+
 test("ответить можно только из того чата, куда доставлено", async () => {
     //Тот же id сообщения в другом чате — это другое сообщение. Иначе /reply открывал бы переписку
     //с любым автором тому, кто угадал номер.
@@ -170,4 +206,39 @@ test("автор заблокировал бота — администрато�
     await run("reply", ROOT_A, "ответ", 1_000);
 
     assert.match(replies.at(-1) ?? "", /Не доставлено/);
+});
+
+test("недоставленный ответ тоже сохраняется — попытка ответить часть переписки", async () => {
+    const {store, run} = setup([ROOT_A], [AUTHOR]);
+
+    await run("message", AUTHOR, "привет");
+    await run("reply", ROOT_A, "ответ", 1_000);
+
+    assert.deepEqual(store.replies.map(reply => reply.delivered), [false]);
+});
+
+test("/feedback показывает обращения с ответами, новые сверху", async () => {
+    const {run, replies} = setup([ROOT_A]);
+
+    await run("message", AUTHOR, "первое");
+    await run("message", AUTHOR, "второе");
+    await run("reply", ROOT_A, "на первое", 1_000);
+    await run("feedback", ROOT_A, "");
+
+    const text = replies.at(-1) ?? "";
+    assert.match(text, /Обратная связь: 2/);
+    assert.ok(text.indexOf("второе") < text.indexOf("первое"), "новые сверху");
+    assert.match(text, /💬 .*: на первое/);
+    assert.match(text, /без ответа/);
+});
+
+test("страница /feedback с длинными обращениями и ответами влезает в сообщение Telegram", async () => {
+    const {renderFeedbackList} = await import("./FeedbackMessages.js");
+    const long = "<&>".repeat(700);
+    const threads = Array.from({length: 10}, (_, index) => ({
+        id: index + 1, chatId: 555, author: "Вася", text: long, createdAt: new Date(0),
+        replies: Array.from({length: 5}, () => ({text: long, createdAt: new Date(0), delivered: true, adminUserId: 1})),
+    }));
+
+    assert.ok(renderFeedbackList(threads, 10, 0).text.length <= 4096);
 });

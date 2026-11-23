@@ -16,7 +16,7 @@ import {
 import type {PlayerObserver} from "../players/PlayerObserver.js";
 import {ServerAdminCommands, type AdminServerChecker, type ServerAdministration} from "./ServerAdminCommands.js";
 import {FeedbackCommands, type FeedbackSender, type FeedbackStore} from "./FeedbackCommands.js";
-import {ChatListCommands, type ChatDirectory, type RootChecker} from "./ChatListCommands.js";
+import {ChatListCommands, type ChatDirectory, type ChatHistorySource, type RootChecker} from "./ChatListCommands.js";
 import {encodePlayerCard, encodePlayerHistory, encodePlayerInfo, encodePlayerPick, encodePlayerQueue, encodePlayerWait} from "./PlayerMessages.js";
 import {silentLogger} from "../test/silentLogger.js";
 
@@ -44,7 +44,7 @@ function allCommandSets(): BotCommands[] {
             silentLogger,
         ),
         new TeamSpeakCommands({} as unknown as OnlineNicknamesSource),
-        new ChatListCommands({} as unknown as ChatDirectory, {} as unknown as RootChecker, silentLogger),
+        new ChatListCommands({} as unknown as ChatDirectory, {} as unknown as ChatHistorySource, {} as unknown as RootChecker, silentLogger),
         new PlayerCommands(
             {} as unknown as PlayerObserver,
             {} as unknown as PlayerSubscriptionStore,

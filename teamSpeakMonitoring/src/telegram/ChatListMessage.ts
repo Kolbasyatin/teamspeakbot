@@ -1,5 +1,6 @@
-import {InlineKeyboard} from "grammy";
+import type {InlineKeyboard} from "grammy";
 import {escapeHtml} from "./escapeHtml.js";
+import {pagingKeyboard} from "./pagingKeyboard.js";
 import type {TelegramChatType} from "./TelegramChat.js";
 
 //Список чатов, которые писали боту (/chats): текст и кнопки листания чистой функцией,
@@ -78,7 +79,7 @@ export function renderChatList(view: ChatListPage): {text: string; keyboard: Inl
     const others = view.counts.total - view.counts.private;
     const lines = [
         `<b>Чаты, писавшие боту: ${view.counts.total}</b> (личек ${view.counts.private}, групп и каналов ${others})`,
-        `Страница ${view.page + 1} из ${pages}, новые сверху. Роли одного чата — /roles &lt;chat_id&gt;.`,
+        `Страница ${view.page + 1} из ${pages}, новые сверху. История одного чата — /chats &lt;chat_id&gt;.`,
         "",
     ];
 
@@ -87,13 +88,14 @@ export function renderChatList(view: ChatListPage): {text: string; keyboard: Inl
     }
 
     for (const entry of view.entries) {
-        lines.push(...renderEntry(entry, view.isRoot(entry.chatId)));
+        lines.push(...renderChatHeader(entry, view.isRoot(entry.chatId)));
     }
 
-    return {text: lines.join("\n"), keyboard: pagingKeyboard(view.page, pages)};
+    return {text: lines.join("\n"), keyboard: pagingKeyboard(view.page, pages, encodeChatListPage)};
 }
 
-function renderEntry(entry: ChatListEntry, isRoot: boolean): string[] {
+//Две строки о чате: кто и как давно, роли, подписки. Общая для списка и для истории одного чата.
+export function renderChatHeader(entry: ChatListEntry, isRoot: boolean): string[] {
     //Роли — в той форме, в какой их пишут в /grant: ts_user, а не ROLE_TS_USER.
     const roles = [...(isRoot ? ["root"] : []), ...entry.roles.map(shortRole)];
     const details = [
@@ -122,20 +124,3 @@ function shortRole(role: string): string {
     return role.replace(/^ROLE_/, "").toLowerCase();
 }
 
-function pagingKeyboard(page: number, pages: number): InlineKeyboard | undefined {
-    if (pages <= 1) {
-        return undefined;
-    }
-
-    const keyboard = new InlineKeyboard();
-
-    if (page > 0) {
-        keyboard.text("◀", encodeChatListPage(page - 1));
-    }
-
-    if (page < pages - 1) {
-        keyboard.text("▶", encodeChatListPage(page + 1));
-    }
-
-    return keyboard;
-}

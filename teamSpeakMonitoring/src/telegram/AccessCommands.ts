@@ -16,6 +16,7 @@ import type {BotCommands} from "./TelegramBot.js";
 import type {TelegramChat, TelegramChatType} from "./TelegramChat.js";
 import {COMMAND_ACCESS} from "./commandAccess.js";
 import {personOf} from "./AccessGuard.js";
+import {fitMessage} from "./fitMessage.js";
 
 //Доступ глазами команд: всё, что им нужно от AccessControl, и ничего сверх того.
 export interface AccessManager {
@@ -61,8 +62,6 @@ const GRANT_DATE = new Intl.DateTimeFormat("ru-RU", {
     timeZone: "Europe/Moscow",
 });
 
-//Telegram режет сообщение на 4096 символах; запас — под хвост «…и ещё N».
-const MESSAGE_BUDGET = 3_800;
 
 const REFUSAL_TEXT: Record<ManageRefusal, string> = {
     rootOnlyFromConfig: "ROLE_ROOT выдаётся только через TELEGRAM_ROOT_CHAT_IDS — ни выдать, ни отнять его из бота нельзя.",
@@ -512,22 +511,6 @@ export function renderRoleCatalog(): string[] {
     ];
 }
 
-function fitMessage(lines: readonly string[]): string {
-    const kept: string[] = [];
-    let length = 0;
-
-    for (const [index, line] of lines.entries()) {
-        if (length + line.length + 1 > MESSAGE_BUDGET) {
-            kept.push(`…и ещё ${lines.length - index} строк`);
-            break;
-        }
-
-        kept.push(line);
-        length += line.length + 1;
-    }
-
-    return kept.join("\n");
-}
 
 //Страж пропускает раздачу прав только человеку, поэтому undefined здесь — не обычный путь,
 //а страховка на случай, если команду когда-нибудь зарегистрируют мимо стража.

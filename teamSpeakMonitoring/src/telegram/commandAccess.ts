@@ -1,6 +1,8 @@
 import type {Permission} from "../access/Roles.js";
 import {CARD_ACTION_PATTERN} from "./ServerCardMessage.js";
 import {CHAT_LIST_PATTERN} from "./ChatListMessage.js";
+import {CHAT_HISTORY_PATTERN} from "./ChatHistoryMessage.js";
+import {FEEDBACK_PAGE_PATTERN} from "./FeedbackMessages.js";
 import {ADMIN_MANAGE_PATTERN, ADMIN_VIEW_PATTERN} from "./ServerAdminMessages.js";
 import {LIST_ACTION_PATTERN} from "./ServerListMessage.js";
 import {STATUS_REFRESH} from "./ServerStatusMessage.js";
@@ -28,6 +30,7 @@ export const COMMAND_ACCESS: Readonly<Record<string, Permission>> = {
     //обработчик: ответить можно только на доставленное в этот чат сообщение (FeedbackCommands).
     message: "ROLE_ANONYMOUS",
     reply: "ROLE_ANONYMOUS",
+    feedback: "ROLE_FEEDBACK_VIEW",
 
     serverlist: "ROLE_SERVER_LIST",
     my: "ROLE_SERVER_SUBSCRIBE",
@@ -89,6 +92,10 @@ export const CALLBACK_ACCESS: readonly CallbackAccessRule[] = [
     {match: ADMIN_MANAGE_PATTERN, permission: "ROLE_SERVER_MANAGE"},
     //Листание /chats.
     {match: CHAT_LIST_PATTERN, permission: "ROLE_CHAT_LIST"},
+    //Листание истории одного чата (/chats <chat_id>) — то же право, что и список.
+    {match: CHAT_HISTORY_PATTERN, permission: "ROLE_CHAT_LIST"},
+    //Листание /feedback.
+    {match: FEEDBACK_PAGE_PATTERN, permission: "ROLE_FEEDBACK_VIEW"},
 ];
 
 //Чьи права проверять. Правило «видеть — по чату, менять — по человеку».

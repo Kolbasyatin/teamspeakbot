@@ -35,8 +35,8 @@ export interface RoleStore {
 
     grant(chatId: number, role: Role, grantedBy: number | undefined, note: string | undefined): Promise<StoredGrantResult>;
 
-    //true — назначение было и удалено.
-    revoke(chatId: number, role: Role): Promise<boolean>;
+    //true — назначение было и удалено. revokedBy — для истории прав.
+    revoke(chatId: number, role: Role, revokedBy: number | undefined): Promise<boolean>;
 
     //Роль по умолчанию — ОДИН раз за всю историю чата. true — выдана сейчас.
     grantDefaultOnce(chatId: number, role: Role): Promise<boolean>;
@@ -109,6 +109,7 @@ export class AccessControl {
         const refusal = await this.refusalFor(actor, role);
 
         if (refusal) {
+            this.logger.info({actor, targetChatId, role, refusal}, "Выдача роли отклонена");
             return {result: "refused", reason: refusal};
         }
 
@@ -124,11 +125,12 @@ export class AccessControl {
         const refusal = await this.refusalFor(actor, role);
 
         if (refusal) {
+            this.logger.info({actor, targetChatId, role, refusal}, "Отзыв роли отклонён");
             return {result: "refused", reason: refusal};
         }
 
         const before = await this.permissionsOf(targetChatId);
-        const removed = await this.store.revoke(targetChatId, role);
+        const removed = await this.store.revoke(targetChatId, role, actor.userId);
 
         this.cache.delete(targetChatId);
         this.logger.info({actor, targetChatId, role, removed}, "Отзыв роли");

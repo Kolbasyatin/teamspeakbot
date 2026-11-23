@@ -4,6 +4,7 @@ import type {Context} from "grammy";
 import {classifyUpdate, createAccessGuard, DENIED_TEXT, type AccessChecker} from "./AccessGuard.js";
 import type {Permission} from "../access/Roles.js";
 import {silentLogger} from "../test/silentLogger.js";
+import {normalizeEntry, type CommandEntry, type CommandRecorder} from "./CommandJournal.js";
 
 const ME = {username: "TsBot"};
 
@@ -215,4 +216,60 @@ test("кнопку просмотра проверяют по чату", async (
     const ctx = {...callbackContext("a:o:14:c:0:", GROUP), from: {id: VASYA, is_bot: false}} as unknown as Context;
 
     assert.equal(await passes(guard, ctx), true);
+});
+
+//Итерация 23: журнал всего, что просят у бота, с решением стража.
+
+function recorder(): CommandRecorder & {entries: CommandEntry[]} {
+    const entries: CommandEntry[] = [];
+
+    return {entries, record: entry => entries.push(entry)};
+}
+
+test("журнал: разрешённая команда с аргументами и тем, кто набрал", async () => {
+    const journal = recorder();
+    const guard = createAccessGuard(checker(["ROLE_PLAYER_WATCH"]), silentLogger, journal);
+
+    await passes(guard, commandContext("/watch@TsBot  БЛИНК  ", 42, {from: {id: 7, is_bot: false}}));
+
+    assert.deepEqual(journal.entries, [{
+        chatId: 42, userId: 7, kind: "command", name: "watch", arguments: "БЛИНК", permission: "ROLE_PLAYER_WATCH", allowed: true,
+    }]);
+});
+
+test("журнал: отказ и незнакомая команда тоже записываются, чужому боту — нет", async () => {
+    const journal = recorder();
+    const guard = createAccessGuard(checker([]), silentLogger, journal);
+
+    await passes(guard, commandContext("/players"));
+    await passes(guard, commandContext("/nosuchcommand"));
+    await passes(guard, commandContext("/watch@OtherBot"));
+
+    assert.deepEqual(journal.entries.map(entry => [entry.name, entry.permission, entry.allowed]), [
+        ["players", "ROLE_PLAYER_LIST", false],
+        ["nosuchcommand", undefined, false],
+    ]);
+});
+
+test("журнал: кнопки — с данными кнопки, разрешённые, запрещённые и устаревшие", async () => {
+    const journal = recorder();
+    const guard = createAccessGuard(checker(["ROLE_CHAT_LIST"]), silentLogger, journal);
+
+    await passes(guard, callbackContext("ch:1"));
+    await passes(guard, callbackContext("fb:0"));
+    await passes(guard, callbackContext("zz:старое"));
+
+    assert.deepEqual(journal.entries.map(entry => [entry.kind, entry.name, entry.allowed]), [
+        ["button", "ch:1", true],
+        ["button", "fb:0", false],
+        ["button", "zz:старое", false],
+    ]);
+});
+
+test("журнал обрезает длинные аргументы и выбрасывает пустые", () => {
+    const base: CommandEntry = {chatId: 1, userId: undefined, kind: "command", name: "message", arguments: undefined, permission: undefined, allowed: true};
+
+    assert.equal(normalizeEntry({...base, arguments: "   "}).arguments, undefined);
+    assert.equal(normalizeEntry({...base, arguments: "x".repeat(300)}).arguments?.length, 255);
+    assert.equal(normalizeEntry({...base, name: "y".repeat(70)}).name.length, 64);
 });

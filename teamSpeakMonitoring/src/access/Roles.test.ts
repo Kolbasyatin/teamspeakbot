@@ -56,12 +56,14 @@ test("/who не по умолчанию: кто сейчас в TeamSpeak, ви�
     assert.ok(permissionsOfRole("ROLE_TS_USER").has("ROLE_TS_VIEW"));
 });
 
-test("список чатов (/chats) — только у root, ни у одной другой группы", () => {
-    assert.ok(permissionsOfRole("ROLE_ROOT").has("ROLE_CHAT_LIST"));
+test("список чатов (/chats) и обратная связь (/feedback) — только у root, ни у одной другой группы", () => {
+    for (const permission of ["ROLE_CHAT_LIST", "ROLE_FEEDBACK_VIEW"] as const) {
+        assert.ok(permissionsOfRole("ROLE_ROOT").has(permission));
 
-    for (const group of ROLE_GROUPS) {
-        if (group !== "ROLE_ROOT") {
-            assert.ok(!permissionsOfRole(group).has("ROLE_CHAT_LIST"), `${group} не должна видеть список чатов`);
+        for (const group of ROLE_GROUPS) {
+            if (group !== "ROLE_ROOT") {
+                assert.ok(!permissionsOfRole(group).has(permission), `${group} не должна давать ${permission}`);
+            }
         }
     }
 });

@@ -58,8 +58,8 @@ test("отзыв удаляет назначение и сообщает, был
     await insertTelegramChatFixture(pool, {chatId: 100});
     await repository.grant(100, "ROLE_PLAYER_USER", 1, undefined);
 
-    assert.equal(await repository.revoke(100, "ROLE_PLAYER_USER"), true);
-    assert.equal(await repository.revoke(100, "ROLE_PLAYER_USER"), false);
+    assert.equal(await repository.revoke(100, "ROLE_PLAYER_USER", 1), true);
+    assert.equal(await repository.revoke(100, "ROLE_PLAYER_USER", 1), false);
     assert.deepEqual(await repository.findRoles(100), []);
 });
 
@@ -67,7 +67,7 @@ test("роль по умолчанию выдаётся один раз за в�
     await insertTelegramChatFixture(pool, {chatId: 100});
 
     assert.equal(await repository.grantDefaultOnce(100, "ROLE_SERVER_USER"), true);
-    await repository.revoke(100, "ROLE_SERVER_USER");
+    await repository.revoke(100, "ROLE_SERVER_USER", 1);
 
     //Отобранная роль не возвращается повторным /start.
     assert.equal(await repository.grantDefaultOnce(100, "ROLE_SERVER_USER"), false);
@@ -112,4 +112,26 @@ test("назначения одного чата — только его, вкл
     assert.equal(assignments[0]?.note, "из клана");
     assert.equal(assignments[0]?.chatTitle, "Вася");
     assert.deepEqual(await repository.findAssignmentsByChat(555), []);
+});
+
+//Итерация 23: история прав переживает отзыв — кто, когда и что выдавал и отбирал.
+test("каждая выдача и отзыв пишутся в историю; повтор и отзыв несуществующего — нет", async () => {
+    await insertTelegramChatFixture(pool, {chatId: 100});
+
+    await repository.grantDefaultOnce(100, "ROLE_SERVER_USER");
+    await repository.grant(100, "ROLE_TS_USER", 7, "клан");
+    await repository.grant(100, "ROLE_TS_USER", 7, undefined);
+    await repository.revoke(100, "ROLE_TS_USER", 8);
+    await repository.revoke(100, "ROLE_TS_USER", 8);
+
+    const events = await pool.query<{role: string; action: string; actor: number | bigint | null; note: string | null}[]>(
+        "SELECT role, action, actor_user_id AS actor, note FROM role_events WHERE chat_id = ? ORDER BY id",
+        [100],
+    );
+
+    assert.deepEqual(events.map(event => [event.role, event.action, event.actor === null ? null : Number(event.actor), event.note]), [
+        ["ROLE_SERVER_USER", "grant", null, "по умолчанию при /start"],
+        ["ROLE_TS_USER", "grant", 7, "клан"],
+        ["ROLE_TS_USER", "revoke", 8, null],
+    ]);
 });

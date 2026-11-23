@@ -1,4 +1,4 @@
-import {type Pool} from "mariadb";
+import {type Pool, type PoolConnection} from "mariadb";
 import type {RoleAssignment, RoleStore, StoredGrantResult} from "../access/AccessControl.js";
 import type {Role} from "../access/Roles.js";
 
@@ -95,24 +95,40 @@ export class RoleRepository implements RoleStore {
             return "unknownChat";
         }
 
-        const inserted = await this.pool.query(
-            `
-                INSERT IGNORE INTO telegram_chat_roles (chat_id, role, granted_by, note)
-                VALUES (?, ?, ?, ?)
-            `,
-            [chatId, role, grantedBy ?? null, note ?? null],
-        );
+        return this.inTransaction(async connection => {
+            const inserted = await connection.query(
+                `
+                    INSERT IGNORE INTO telegram_chat_roles (chat_id, role, granted_by, note)
+                    VALUES (?, ?, ?, ?)
+                `,
+                [chatId, role, grantedBy ?? null, note ?? null],
+            );
 
-        return Number(inserted.affectedRows) === 1 ? "granted" : "alreadyGranted";
+            if (Number(inserted.affectedRows) !== 1) {
+                return "alreadyGranted";
+            }
+
+            await this.recordEvent(connection, chatId, role, "grant", grantedBy, note);
+
+            return "granted";
+        });
     }
 
-    public async revoke(chatId: number, role: Role): Promise<boolean> {
-        const deleted = await this.pool.query(
-            "DELETE FROM telegram_chat_roles WHERE chat_id = ? AND role = ?",
-            [chatId, role],
-        );
+    public async revoke(chatId: number, role: Role, revokedBy: number | undefined): Promise<boolean> {
+        return this.inTransaction(async connection => {
+            const deleted = await connection.query(
+                "DELETE FROM telegram_chat_roles WHERE chat_id = ? AND role = ?",
+                [chatId, role],
+            );
 
-        return Number(deleted.affectedRows) > 0;
+            if (Number(deleted.affectedRows) === 0) {
+                return false;
+            }
+
+            await this.recordEvent(connection, chatId, role, "revoke", revokedBy, undefined);
+
+            return true;
+        });
     }
 
     //Пометка «выдавали» ставится первой и условным UPDATE: кто её поставил, тот и выдаёт.
@@ -135,11 +151,51 @@ export class RoleRepository implements RoleStore {
             return false;
         }
 
-        await this.pool.query(
-            "INSERT IGNORE INTO telegram_chat_roles (chat_id, role) VALUES (?, ?)",
-            [chatId, role],
-        );
+        await this.inTransaction(async connection => {
+            const inserted = await connection.query(
+                "INSERT IGNORE INTO telegram_chat_roles (chat_id, role) VALUES (?, ?)",
+                [chatId, role],
+            );
+
+            if (Number(inserted.affectedRows) === 1) {
+                await this.recordEvent(connection, chatId, role, "grant", undefined, "по умолчанию при /start");
+            }
+        });
 
         return true;
+    }
+
+    //История прав (миграция 013): каждое изменение назначения — строкой в role_events, в той же
+    //транзакции, что и само изменение. Иначе отказ второй записи оставил бы выдачу без следа,
+    //а журнал, в котором бывают дыры, не отвечает на вопрос «кто дал ему это право».
+    private async recordEvent(
+        connection: PoolConnection,
+        chatId: number,
+        role: Role,
+        action: "grant" | "revoke",
+        actorUserId: number | undefined,
+        note: string | undefined,
+    ): Promise<void> {
+        await connection.query(
+            "INSERT INTO role_events (chat_id, role, action, actor_user_id, note) VALUES (?, ?, ?, ?, ?)",
+            [chatId, role, action, actorUserId ?? null, note ?? null],
+        );
+    }
+
+    private async inTransaction<T>(work: (connection: PoolConnection) => Promise<T>): Promise<T> {
+        const connection = await this.pool.getConnection();
+
+        try {
+            await connection.beginTransaction();
+            const result = await work(connection);
+            await connection.commit();
+
+            return result;
+        } catch (error) {
+            await connection.rollback().catch(() => undefined);
+            throw error;
+        } finally {
+            await connection.release();
+        }
     }
 }
