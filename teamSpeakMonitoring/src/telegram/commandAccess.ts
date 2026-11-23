@@ -3,6 +3,7 @@ import {CARD_ACTION_PATTERN} from "./ServerCardMessage.js";
 import {CHAT_LIST_PATTERN} from "./ChatListMessage.js";
 import {CHAT_HISTORY_PATTERN} from "./ChatHistoryMessage.js";
 import {FEEDBACK_PAGE_PATTERN} from "./FeedbackMessages.js";
+import {BROADCAST_CONFIRM_PATTERN} from "./BroadcastMessages.js";
 import {ADMIN_MANAGE_PATTERN, ADMIN_VIEW_PATTERN} from "./ServerAdminMessages.js";
 import {LIST_ACTION_PATTERN} from "./ServerListMessage.js";
 import {STATUS_REFRESH} from "./ServerStatusMessage.js";
@@ -63,6 +64,15 @@ export const COMMAND_ACCESS: Readonly<Record<string, Permission>> = {
     source_add: "ROLE_SERVER_MANAGE",
     source_edit: "ROLE_SERVER_MANAGE",
     source_delete: "ROLE_SERVER_MANAGE",
+
+    //Рассылки и списки рассылки — одно право, по человеку.
+    send: "ROLE_BROADCAST",
+    broadcasts: "ROLE_BROADCAST",
+    lists: "ROLE_BROADCAST",
+    list_add: "ROLE_BROADCAST",
+    list_delete: "ROLE_BROADCAST",
+    list_include: "ROLE_BROADCAST",
+    list_exclude: "ROLE_BROADCAST",
 };
 
 //Кнопки — те же шаблоны, по которым их ловят наборы: шаблон один, разъехаться нечему.
@@ -96,6 +106,8 @@ export const CALLBACK_ACCESS: readonly CallbackAccessRule[] = [
     {match: CHAT_HISTORY_PATTERN, permission: "ROLE_CHAT_LIST"},
     //Листание /feedback.
     {match: FEEDBACK_PAGE_PATTERN, permission: "ROLE_FEEDBACK_VIEW"},
+    //«Отправить / Отмена» под рассылкой — по нажавшему, как и сама команда.
+    {match: BROADCAST_CONFIRM_PATTERN, permission: "ROLE_BROADCAST"},
 ];
 
 //Чьи права проверять. Правило «видеть — по чату, менять — по человеку».
@@ -109,7 +121,7 @@ export const CALLBACK_ACCESS: readonly CallbackAccessRule[] = [
 //раздачи прав не может случайно начать проверяться по чату.
 export type AccessSubject = "chat" | "user";
 
-const PERSONAL_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>(["ROLE_ACCESS_MANAGE", "ROLE_SERVER_MANAGE"]);
+const PERSONAL_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>(["ROLE_ACCESS_MANAGE", "ROLE_SERVER_MANAGE", "ROLE_BROADCAST"]);
 
 export function accessSubject(permission: Permission): AccessSubject {
     return PERSONAL_PERMISSIONS.has(permission) ? "user" : "chat";

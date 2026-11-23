@@ -29,8 +29,6 @@ test.before(async () => {
 
 test.beforeEach(async () => {
     await truncateTestDatabase(pool);
-    //telegram_command_log не привязан к чатам внешним ключом, каскад его не чистит.
-    await pool.query("DELETE FROM telegram_command_log");
 });
 
 test.after(async () => {

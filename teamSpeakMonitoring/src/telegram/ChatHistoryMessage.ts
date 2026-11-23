@@ -11,7 +11,8 @@ export type ChatHistoryEntry =
     | {kind: "command" | "button"; at: Date; userId: number | undefined; name: string; arguments: string | undefined; known: boolean; allowed: boolean}
     | {kind: "grant" | "revoke"; at: Date; role: string; actorUserId: number | undefined; note: string | undefined}
     | {kind: "feedback"; at: Date; feedbackId: number; text: string; userId: number | undefined}
-    | {kind: "reply"; at: Date; feedbackId: number; text: string; delivered: boolean};
+    | {kind: "reply"; at: Date; feedbackId: number; text: string; delivered: boolean}
+    | {kind: "broadcast"; at: Date; broadcastId: number; preview: string | undefined; status: "delivered" | "blocked" | "failed"; error: string | undefined};
 
 export interface ChatHistoryPage {
     chatId: number;
@@ -106,6 +107,11 @@ function renderEntry(entry: ChatHistoryEntry, chatId: number): string {
             return `✉️ #${entry.feedbackId}: ${escapeHtml(cut(entry.text))}${byWhom(entry.userId, chatId)}`;
         case "reply":
             return `💬 ответ на #${entry.feedbackId}${entry.delivered ? "" : " (не доставлен)"}: ${escapeHtml(cut(entry.text))}`;
+        case "broadcast": {
+            const verdict = entry.status === "delivered" ? "" : ` (${entry.status === "blocked" ? "недоступен" : "ошибка"}${entry.error ? `: ${escapeHtml(cut(entry.error))}` : ""})`;
+
+            return `📣 рассылка #${entry.broadcastId}${verdict}: ${escapeHtml(cut(entry.preview ?? "вложение без текста"))}`;
+        }
     }
 }
 

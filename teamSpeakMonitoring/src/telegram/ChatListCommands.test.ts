@@ -92,7 +92,7 @@ test("кнопка за последней страницей (чаты удал
 test("/chats <chat_id> показывает историю этого чата, а не список", async () => {
     const chat: ChatListEntry = {
         chatId: -1003738458034, type: "supergroup", title: "Arma", firstSeenAt: new Date("2026-10-01T00:00:00Z"),
-        roles: ["ROLE_SERVER_USER"], serverSubscriptions: 1,
+        roles: ["ROLE_SERVER_USER"], serverSubscriptions: 1, lists: ["klan"], blocked: false,
     };
     const asked: {chatId: number; limit: number; offset: number}[] = [];
     const entry: ChatHistoryEntry = {

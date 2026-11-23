@@ -58,6 +58,13 @@ export class TelegramSender {
         return message.message_id;
     }
 
+    //Копия чужого сообщения (рассылки, итерация 24): copyMessage сохраняет разметку, ссылки
+    //и вложения оригинала, а подписи «переслано от» не ставит. Через тот же слот: лимит общий.
+    public async copy(chatId: number, fromChatId: number, messageId: number): Promise<void> {
+        await this.waitForSlot();
+        await this.bot.api.copyMessage(chatId, fromChatId, messageId);
+    }
+
     //Слот занимается синхронно, до любого await: два одновременных вызова обязаны получить
     //разные слоты, а не одинаковый.
     private async waitForSlot(): Promise<void> {

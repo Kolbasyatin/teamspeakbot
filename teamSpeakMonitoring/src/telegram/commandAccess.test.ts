@@ -17,6 +17,8 @@ import type {PlayerObserver} from "../players/PlayerObserver.js";
 import {ServerAdminCommands, type AdminServerChecker, type ServerAdministration} from "./ServerAdminCommands.js";
 import {FeedbackCommands, type FeedbackSender, type FeedbackStore} from "./FeedbackCommands.js";
 import {ChatListCommands, type ChatDirectory, type ChatHistorySource, type RootChecker} from "./ChatListCommands.js";
+import {BroadcastCommands, type BroadcastLauncher} from "./BroadcastCommands.js";
+import type {BroadcastStore, MailingListStore} from "../broadcasts/Broadcasts.js";
 import {encodePlayerCard, encodePlayerHistory, encodePlayerInfo, encodePlayerPick, encodePlayerQueue, encodePlayerWait} from "./PlayerMessages.js";
 import {silentLogger} from "../test/silentLogger.js";
 
@@ -45,6 +47,7 @@ function allCommandSets(): BotCommands[] {
         ),
         new TeamSpeakCommands({} as unknown as OnlineNicknamesSource),
         new ChatListCommands({} as unknown as ChatDirectory, {} as unknown as ChatHistorySource, {} as unknown as RootChecker, silentLogger),
+        new BroadcastCommands({} as unknown as BroadcastStore, {} as unknown as MailingListStore, {} as unknown as BroadcastLauncher, silentLogger),
         new PlayerCommands(
             {} as unknown as PlayerObserver,
             {} as unknown as PlayerSubscriptionStore,
@@ -182,7 +185,8 @@ test("правка проверяется по человеку, просмот�
     //раздача прав; с управлением серверами к ней добавилась правка списка серверов.
     //Иначе root не смог бы раздавать права и править серверы в группе, а группа с такими правами
     //давала бы их каждому участнику.
-    const personal = new Set(["ROLE_ACCESS_MANAGE", "ROLE_SERVER_MANAGE"]);
+    //С итерации 24 — и рассылки: отправить объявление всем — действие конкретного человека.
+    const personal = new Set(["ROLE_ACCESS_MANAGE", "ROLE_SERVER_MANAGE", "ROLE_BROADCAST"]);
 
     for (const [command, permission] of Object.entries(COMMAND_ACCESS)) {
         assert.equal(accessSubject(permission), personal.has(permission) ? "user" : "chat", `/${command}`);
@@ -192,4 +196,5 @@ test("правка проверяется по человеку, просмот�
     assert.equal(accessSubject(COMMAND_ACCESS["server_edit"] ?? "ROLE_ANONYMOUS"), "user");
     assert.equal(accessSubject(COMMAND_ACCESS["server"] ?? "ROLE_ANONYMOUS"), "chat", "просмотр карточки — по чату");
     assert.equal(accessSubject(COMMAND_ACCESS["watch"] ?? "ROLE_ANONYMOUS"), "chat");
+    assert.equal(accessSubject(COMMAND_ACCESS["send"] ?? "ROLE_ANONYMOUS"), "user", "рассылка — по человеку");
 });

@@ -57,6 +57,11 @@ import {ChatListCommands} from "./telegram/ChatListCommands.js";
 import {ChatDirectoryRepository} from "./persistence/ChatDirectoryRepository.js";
 import {ChatHistoryRepository} from "./persistence/ChatHistoryRepository.js";
 import {CommandJournal} from "./telegram/CommandJournal.js";
+import {BroadcastRepository} from "./persistence/BroadcastRepository.js";
+import {BroadcastRunner} from "./broadcasts/BroadcastRunner.js";
+import {BroadcastCommands} from "./telegram/BroadcastCommands.js";
+import {TelegramBroadcastSender} from "./telegram/TelegramBroadcastSender.js";
+import {renderReport} from "./telegram/BroadcastMessages.js";
 import {createAccessGuard} from "./telegram/AccessGuard.js";
 import {buildPlayerFeature, type ChatSender} from "./players/buildPlayerFeature.js";
 import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
@@ -273,6 +278,29 @@ async function main(): Promise<any> {
     const accessCommands = new AccessCommands(access, subscriptionRepository, chatMenus, log.child({component: "access"}));
     //Журнал команд и история чата (итерация 23): пишет страж прав, читает /chats <chat_id>.
     const chatHistory = new ChatHistoryRepository(pool);
+    //Рассылки (итерация 24). Транспорт — общий sender бота с его ограничителем частоты, тем же поздним
+    //связыванием, что chatSender: бот собирается позже наборов команд.
+    const broadcastRepository = new BroadcastRepository(pool);
+    const broadcastTransport = {
+        send: async (chatId: number, html: string): Promise<void> => {
+            if (!telegramBot) {
+                throw new Error("Telegram отключён");
+            }
+            await telegramBot.sender.send(chatId, html);
+        },
+        copy: async (chatId: number, fromChatId: number, messageId: number): Promise<void> => {
+            if (!telegramBot) {
+                throw new Error("Telegram отключён");
+            }
+            await telegramBot.sender.copy(chatId, fromChatId, messageId);
+        },
+    };
+    const broadcastRunner = new BroadcastRunner(
+        broadcastRepository,
+        new TelegramBroadcastSender(broadcastTransport),
+        (broadcast, counts) => broadcastTransport.send(broadcast.authorChatId, renderReport(broadcast, counts)),
+        log.child({component: "broadcast"}),
+    );
 
     if (tgProperties.rootChatIds.length === 0) {
         log.warn("TELEGRAM_ROOT_CHAT_IDS пуст — раздавать права некому, команды про игроков недоступны никому");
@@ -287,6 +315,7 @@ async function main(): Promise<any> {
         ? new TelegramBot(telegramApi, [
             accessCommands,
             new ChatListCommands(new ChatDirectoryRepository(pool), chatHistory, access, log.child({component: "access"})),
+            new BroadcastCommands(broadcastRepository, broadcastRepository, broadcastRunner, log.child({component: "broadcast"})),
             feedbackCommands,
             serverAdminCommands,
             new TeamSpeakCommands(teamSpeakClient),
@@ -596,6 +625,12 @@ async function main(): Promise<any> {
         const restored = restorableStates(saved, now, stateSyncProperties.restoreMaxAgeMs);
         monitor.restoreStates(restored);
         const deliveries = await statusDeliveries.load();
+        //Рассылка, оборванная рестартом, сама не продолжится: честно помечаем прерванной.
+        const interrupted = await broadcastRepository.interruptUnfinished();
+
+        if (interrupted > 0) {
+            log.warn({interrupted}, "Рассылки прерваны перезапуском — недоставленным они уже не уйдут");
+        }
 
         log.info(
             {savedStates: saved.length, restoredStates: restored.size, deliveries},

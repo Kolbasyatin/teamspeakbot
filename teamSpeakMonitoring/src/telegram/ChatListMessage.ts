@@ -16,6 +16,9 @@ export interface ChatListEntry {
     //Роли из базы как есть. ROLE_ROOT здесь не бывает — он из конфигурации, см. isRoot.
     roles: readonly string[];
     serverSubscriptions: number;
+    //Списки рассылки, в которых состоит чат, и пометка «недоступен насовсем» (итерация 24).
+    lists: readonly string[];
+    blocked: boolean;
 }
 
 export interface ChatCounts {
@@ -102,6 +105,8 @@ export function renderChatHeader(entry: ChatListEntry, isRoot: boolean): string[
         `с ${DATE.format(entry.firstSeenAt)}`,
         roles.length > 0 ? roles.join(", ") : "без ролей",
         ...(entry.serverSubscriptions > 0 ? [`подписок ${entry.serverSubscriptions}`] : []),
+        ...(entry.lists.length > 0 ? [`списки: ${entry.lists.join(", ")}`] : []),
+        ...(entry.blocked ? ["🚫 недоступен"] : []),
     ];
 
     return [

@@ -71,3 +71,13 @@ test("худший случай — страница длинных аргуме
 
     assert.ok(text.length <= 4096, `длина ${text.length}`);
 });
+
+test("полученные рассылки видны в истории чата, недоставленные — с причиной", () => {
+    const text = render([
+        {kind: "broadcast", at: AT, broadcastId: 5, preview: "Вечером турнир", status: "delivered", error: undefined},
+        {kind: "broadcast", at: AT, broadcastId: 6, preview: undefined, status: "blocked", error: "403: Forbidden: bot was blocked by the user"},
+    ]);
+
+    assert.match(text, /📣 рассылка #5: Вечером турнир$/m);
+    assert.match(text, /📣 рассылка #6 \(недоступен: 403: Forbidden: bot was blocked by the user\): вложение без текста/);
+});

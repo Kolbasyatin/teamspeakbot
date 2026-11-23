@@ -9,7 +9,7 @@ type CountRow = {
 
 type HistoryRow = {
     at: Date;
-    kind: "command" | "button" | "grant" | "revoke" | "feedback" | "reply";
+    kind: "command" | "button" | "grant" | "revoke" | "feedback" | "reply" | "broadcast";
     name: string | null;
     body: string | null;
     flag: number | bigint;
@@ -44,9 +44,10 @@ export class ChatHistoryRepository implements CommandJournalStore, ChatHistorySo
                      + (SELECT COUNT(*)
                         FROM feedback_replies reply
                                  JOIN feedback_messages feedback ON feedback.id = reply.feedback_id
-                        WHERE feedback.chat_id = ?) AS total
+                        WHERE feedback.chat_id = ?)
+                     + (SELECT COUNT(*) FROM broadcast_deliveries WHERE chat_id = ?) AS total
             `,
-            [chatId, chatId, chatId, chatId],
+            [chatId, chatId, chatId, chatId, chatId],
         );
 
         return Number(rows[0]?.total ?? 0);
@@ -82,11 +83,17 @@ export class ChatHistoryRepository implements CommandJournalStore, ChatHistorySo
                              reply.feedback_id, NULL
                       FROM feedback_replies reply
                                JOIN feedback_messages feedback ON feedback.id = reply.feedback_id
-                      WHERE feedback.chat_id = ?) history
+                      WHERE feedback.chat_id = ?
+                      UNION ALL
+                      SELECT delivery.delivered_at, 'broadcast', delivery.status, broadcast.preview, 1, NULL,
+                             delivery.broadcast_id, delivery.error
+                      FROM broadcast_deliveries delivery
+                               JOIN broadcasts broadcast ON broadcast.id = delivery.broadcast_id
+                      WHERE delivery.chat_id = ?) history
                 ORDER BY history.at DESC
                 LIMIT ? OFFSET ?
             `,
-            [chatId, chatId, chatId, chatId, limit, offset],
+            [chatId, chatId, chatId, chatId, chatId, limit, offset],
         );
 
         return rows.map(toEntry);
@@ -116,5 +123,14 @@ function toEntry(row: HistoryRow): ChatHistoryEntry {
             return {kind: "feedback", at, feedbackId: Number(row.refId), text: row.body ?? "", userId};
         case "reply":
             return {kind: "reply", at, feedbackId: Number(row.refId), text: row.body ?? "", delivered: Number(row.flag) === 1};
+        case "broadcast":
+            return {
+                kind: "broadcast",
+                at,
+                broadcastId: Number(row.refId),
+                preview: row.body ?? undefined,
+                status: row.name === "blocked" || row.name === "failed" ? row.name : "delivered",
+                error: row.extra ?? undefined,
+            };
     }
 }

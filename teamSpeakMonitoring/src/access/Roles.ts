@@ -36,6 +36,9 @@ export const PERMISSIONS = [
     "ROLE_CHAT_LIST",
     //Вся обратная связь с ответами (/feedback). Только у root, как и список чатов: чужая переписка.
     "ROLE_FEEDBACK_VIEW",
+    //Рассылки и списки рассылки (/send, /lists, /list_*, /broadcasts). Только у root, остальным —
+    //поштучно. По ЧЕЛОВЕКУ: рассылка — действие, как раздача прав (итерация 24).
+    "ROLE_BROADCAST",
 ] as const;
 
 export type Permission = typeof PERMISSIONS[number];
@@ -95,6 +98,7 @@ export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
         "ROLE_TS_USER",
         "ROLE_CHAT_LIST",
         "ROLE_FEEDBACK_VIEW",
+        "ROLE_BROADCAST",
         "ROLE_USER_ADMIN",
         "ROLE_SERVER_ADMIN",
     ],

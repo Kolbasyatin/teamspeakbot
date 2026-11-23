@@ -44,8 +44,10 @@ export class SubscriptionRepository {
             `
                 INSERT INTO telegram_chats (chat_id, type, title)
                 VALUES (?, ?, ?)
-                ON DUPLICATE KEY UPDATE type  = VALUES(type),
-                                        title = VALUES(title)
+                ON DUPLICATE KEY UPDATE type       = VALUES(type),
+                                        title      = VALUES(title),
+                                        -- Чат снова пишет боту — значит, не заблокировал (итерация 24).
+                                        blocked_at = NULL
             `,
             [chat.chatId, chat.type, chat.title ?? null],
         );

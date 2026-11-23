@@ -15,6 +15,8 @@ type ChatRow = {
     createdAt: Date;
     roles: string | null;
     subscriptions: number | bigint;
+    lists: string | null;
+    blockedAt: Date | null;
 };
 
 //Список чатов для /chats: кто писал боту, роли и число подписок на серверы. Только чтение.
@@ -65,11 +67,16 @@ export class ChatDirectoryRepository implements ChatDirectory {
                        GROUP_CONCAT(role.role ORDER BY role.role SEPARATOR ',') AS roles,
                        (SELECT COUNT(*)
                         FROM server_subscriptions subscription
-                        WHERE subscription.chat_id = chat.chat_id)         AS subscriptions
+                        WHERE subscription.chat_id = chat.chat_id)         AS subscriptions,
+                       (SELECT GROUP_CONCAT(list.name ORDER BY list.name SEPARATOR ',')
+                        FROM mailing_list_members member
+                                 JOIN mailing_lists list ON list.id = member.list_id
+                        WHERE member.chat_id = chat.chat_id)               AS lists,
+                       chat.blocked_at                                     AS blockedAt
                 FROM telegram_chats chat
                          LEFT JOIN telegram_chat_roles role ON role.chat_id = chat.chat_id
                 ${where}
-                GROUP BY chat.chat_id, chat.type, chat.title, chat.created_at
+                GROUP BY chat.chat_id, chat.type, chat.title, chat.created_at, chat.blocked_at
                 ORDER BY chat.created_at DESC, chat.chat_id DESC
                 ${limit}
             `,
@@ -83,6 +90,8 @@ export class ChatDirectoryRepository implements ChatDirectory {
             firstSeenAt: row.createdAt,
             roles: row.roles === null ? [] : row.roles.split(","),
             serverSubscriptions: Number(row.subscriptions),
+            lists: row.lists === null ? [] : row.lists.split(","),
+            blocked: row.blockedAt !== null,
         }));
     }
 }

@@ -18,6 +18,8 @@ function entry(overrides: Partial<ChatListEntry> = {}): ChatListEntry {
         firstSeenAt: new Date("2026-09-25T12:00:00Z"),
         roles: ["ROLE_SERVER_USER"],
         serverSubscriptions: 0,
+        lists: [],
+        blocked: false,
         ...overrides,
     };
 }
@@ -98,4 +100,15 @@ test("кнопка листания разбирается и требует п�
     assert.equal(decodeChatListPage(encodeChatListPage(7)), 7);
     assert.equal(decodeChatListPage("ch:x"), undefined);
     assert.equal(callbackPermission(encodeChatListPage(0)), "ROLE_CHAT_LIST");
+});
+
+test("списки рассылки и недоступность видны в строке чата", () => {
+    const {text} = renderChatList({
+        entries: [entry({lists: ["klan", "testers"], blocked: true})],
+        counts: {total: 1, private: 1},
+        page: 0,
+        isRoot: noRoot,
+    });
+
+    assert.match(text, /списки: klan, testers · 🚫 недоступен/);
 });
