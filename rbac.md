@@ -41,7 +41,8 @@
 
 ```
 ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
-            └── ROLE_USER_ADMIN ───┴── ROLE_SERVER_USER        (+ ROLE_ANONYMOUS у всех)
+            ├── ROLE_USER_ADMIN ───┴── ROLE_SERVER_USER        (+ ROLE_ANONYMOUS у всех)
+            └── ROLE_TS_USER                                    (/who — только по выдаче)
 ```
 
 | Группа | Право | Команды | Кнопки |
@@ -51,7 +52,6 @@ ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
 | | `ROLE_SERVER_SUBSCRIBE` | `/my` | `k:` (карточка: подписка, проверка, галочки) |
 | | `ROLE_SERVER_STATUS` | `/status`, `/time` | `s:r` |
 | | `ROLE_SERVER_OBSERVED` | `/observed` | — |
-| | `ROLE_TS_VIEW` | `/who` | — |
 | **ROLE_PLAYER_USER** | `ROLE_PLAYER_WATCH` | `/watch`, `/wait`, `/unwatch` | `p:`, `pw:` |
 | | `ROLE_PLAYER_LIST` | `/players` | — |
 | | `ROLE_PLAYER_WHERE` | `/where` | `pc:` |
@@ -59,10 +59,16 @@ ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
 | | `ROLE_PLAYER_ALIASES` | `/aliases` | — |
 | | `ROLE_PLAYER_DOSSIER` | `/playerinfo`, `/steaminfo` | `pi:` |
 | | `ROLE_PLAYER_QUEUE` | — (команды нет) | `pq:` — «Проверить очередь» под уведомлением «встал в очередь» |
+| **ROLE_TS_USER** (2026-11-24) — только по выдаче | `ROLE_TS_VIEW` | `/who` | — |
 | **ROLE_USER_ADMIN** | `ROLE_ACCESS_MANAGE` | `/grant`, `/revoke`, `/roles` | — |
 | **ROLE_SERVER_ADMIN** (итерация 14) | `ROLE_SERVER_ADMIN_VIEW` — по чату | `/server <id>`; `/serverlist` показывает все серверы с `#id` | `a:o`, `a:k` (открыть, проверить) |
 | | `ROLE_SERVER_MANAGE` — по человеку | `/server_add`, `/server_edit`, `/server_delete`, `/source_add`, `/source_edit`, `/source_delete` | `a:e`, `a:d`, `a:x`, `a:y`, `a:se`, `a:sd`, `a:sx` (вкл/выкл, удаление) |
 | **ROLE_ROOT** — из `TELEGRAM_ROOT_CHAT_IDS`, отнять нельзя | всё | | |
+
+`/who` до 2026-11-24 входил в `ROLE_SERVER_USER`, то есть был у всех. Вынесен в `ROLE_TS_USER`
+(решение zalex): кто сейчас в TeamSpeak — для своих. Выдаётся `/grant <chat_id> ts_user`: группе —
+и `/who` работает у всех её участников в этой группе, — или человеку в личку. В `ROLE_USER_ADMIN`
+группа не входит, как и `ROLE_PLAYER_USER`: раздаёт её root или админ, которому её выдали.
 
 `ROLE_SUPER_USER` из первой редакции переименован в `ROLE_PLAYER_USER`: «супер» читалось как
 «почти root». `ROLE_SERVER_ADMIN` заведён в итерации 14 вместе с командами управления серверами;

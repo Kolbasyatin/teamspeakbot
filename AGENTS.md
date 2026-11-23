@@ -16,7 +16,8 @@
 3. держит in-memory состояние каждого сервера (`unknown` / `online` / `offline`) с антидребезгом по `failedChecks`;
 4. при изменении сводного представления обновляет `channel_description` заданных каналов TeamSpeak (BBCode);
 5. при переходах статуса online/offline пишет в Telegram-канал;
-6. отвечает на команды Telegram-бота (`/who`, `/serverlist`, `/my`, `/status`); из карточки сервера
+6. отвечает на команды Telegram-бота (`/serverlist`, `/my`, `/status`; `/who` — только по выдаче
+   группы `ROLE_TS_USER`, итерация 20); из карточки сервера
    разово опрашивает любой сервер каталога («🔍 Проверить») — без подписки и мимо расписания;
 7. поднимает внутренний admin HTTP endpoint для перечитывания списка серверов из БД без рестарта;
 8. **следит за игроками** (`/watch`, `/players`, `/where`, `/history`, `/observed`): подписки на вход
@@ -500,7 +501,7 @@ teamSpeakMonitoring/         сам сервис
 | `TELEGRAM_NOTIFIER` | `false` | вкл. Telegram-уведомления о статусах |
 | `TELEGRAM_ROOT_CHAT_IDS` | `""` | chat_id через запятую, у которых всегда `ROLE_ROOT` (`rbac.md`). В базе не хранится, из бота не отнимается. Не число — старт падает. Пусто — раздавать права некому, warn в лог |
 | `FEEDBACK_CHAT_ID` | `""` | куда доставлять `/message` (через запятую можно несколько). Пусто — всем из `TELEGRAM_ROOT_CHAT_IDS` в личку |
-| `TELEGRAM_PROXY_URL` | `""` | SOCKS-прокси до Bot API (`socks5h://host.docker.internal:10809` на проде). Пусто — напрямую. Обрывы до отправки запроса повторяются (итерация 19) |
+| `TELEGRAM_PROXY_URL` | `""` | SOCKS-прокси до Bot API. На проде с 2026-11-07 — `socks5h://xray-vless-premium:10810` (xray vless; контейнер подключён к сети `arma-services`, логи xray: `docker logs xray-vless-premium`). Пусто — напрямую. Обрывы до отправки запроса повторяются (итерация 19) |
 | `TELEGRAM_UPDATE_TIMEOUT_MS` | `60000` | потолок обработки одного апдейта; дольше — бот идёт за следующими, обработчик брошен. Больше самого долгого законного ответа (досье — до 30 с) |
 | `TS_QUERY_TIMEOUT_MS` | `10000` | потолок одной операции TeamSpeak вместе с подключением |
 | `LOG_LEVEL` | `debug` вне prod, `info` в prod | `debug` показывает каждый `getUpdates`, апдейт и вызов Bot API |

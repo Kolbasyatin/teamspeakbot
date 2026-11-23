@@ -38,6 +38,7 @@ export type Permission = typeof PERMISSIONS[number];
 export const ROLE_GROUPS = [
     "ROLE_SERVER_USER",
     "ROLE_PLAYER_USER",
+    "ROLE_TS_USER",
     "ROLE_USER_ADMIN",
     "ROLE_SERVER_ADMIN",
     "ROLE_ROOT",
@@ -55,7 +56,6 @@ export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
         "ROLE_SERVER_SUBSCRIBE",
         "ROLE_SERVER_STATUS",
         "ROLE_SERVER_OBSERVED",
-        "ROLE_TS_VIEW",
     ],
     ROLE_PLAYER_USER: [
         "ROLE_SERVER_USER",
@@ -66,6 +66,13 @@ export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
         "ROLE_PLAYER_ALIASES",
         "ROLE_PLAYER_DOSSIER",
         "ROLE_PLAYER_QUEUE",
+    ],
+    //Кто сейчас в TeamSpeak (/who). Не всем по умолчанию: список ников голосового сервера — для своих
+    //(решение zalex 2026-11-24). Выдаётся чату: группе — тогда /who работает у всех её участников
+    //прямо в группе, — или человеку в личку. Группой, а не голым правом: команды TeamSpeak
+    //добавятся сюда же, и выданное раньше их получит без повторной выдачи.
+    ROLE_TS_USER: [
+        "ROLE_TS_VIEW",
     ],
     ROLE_USER_ADMIN: [
         "ROLE_SERVER_USER",
@@ -80,6 +87,7 @@ export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
     ],
     ROLE_ROOT: [
         "ROLE_PLAYER_USER",
+        "ROLE_TS_USER",
         "ROLE_USER_ADMIN",
         "ROLE_SERVER_ADMIN",
     ],

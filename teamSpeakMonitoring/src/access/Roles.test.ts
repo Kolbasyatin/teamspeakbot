@@ -47,7 +47,23 @@ test("роль по умолчанию — серверы, без игроков
 
     assert.ok(!DEFAULT_PERMISSIONS.has("ROLE_ACCESS_MANAGE"));
     assert.ok(DEFAULT_PERMISSIONS.has("ROLE_SERVER_SUBSCRIBE"));
-    assert.ok(DEFAULT_PERMISSIONS.has("ROLE_TS_VIEW"));
+});
+
+test("/who не по умолчанию: кто сейчас в TeamSpeak, видят только те, кому выдали", () => {
+    assert.ok(!DEFAULT_PERMISSIONS.has("ROLE_TS_VIEW"));
+    assert.ok(!permissionsOfRole("ROLE_PLAYER_USER").has("ROLE_TS_VIEW"));
+    assert.ok(!permissionsOfRole("ROLE_USER_ADMIN").has("ROLE_TS_VIEW"));
+    assert.ok(permissionsOfRole("ROLE_TS_USER").has("ROLE_TS_VIEW"));
+});
+
+test("группу TeamSpeak выдаёт root и админ, у которого она есть; админ без неё — нет", () => {
+    const root = permissionsOfRoles(["ROLE_ROOT"]);
+    const admin = permissionsOfRoles(["ROLE_USER_ADMIN"]);
+    const adminWithTs = permissionsOfRoles(["ROLE_USER_ADMIN", "ROLE_TS_USER"]);
+
+    assert.equal(manageRefusal(root, true, "ROLE_TS_USER"), undefined);
+    assert.equal(manageRefusal(admin, false, "ROLE_TS_USER"), "exceedsOwn");
+    assert.equal(manageRefusal(adminWithTs, false, "ROLE_TS_USER"), undefined);
 });
 
 test("аноним есть у всех, даже без единой роли", () => {
@@ -108,5 +124,6 @@ test("роль пишут как удобно", () => {
     assert.equal(parseRole("player_user"), "ROLE_PLAYER_USER");
     assert.equal(parseRole("ROLE_PLAYER_USER"), "ROLE_PLAYER_USER");
     assert.equal(parseRole("Role_Ts_View"), "ROLE_TS_VIEW");
+    assert.equal(parseRole("ts_user"), "ROLE_TS_USER");
     assert.equal(parseRole("superuser"), undefined);
 });
