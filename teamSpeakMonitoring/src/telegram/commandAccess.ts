@@ -1,5 +1,6 @@
 import type {Permission} from "../access/Roles.js";
 import {CARD_ACTION_PATTERN} from "./ServerCardMessage.js";
+import {CHAT_LIST_PATTERN} from "./ChatListMessage.js";
 import {ADMIN_MANAGE_PATTERN, ADMIN_VIEW_PATTERN} from "./ServerAdminMessages.js";
 import {LIST_ACTION_PATTERN} from "./ServerListMessage.js";
 import {STATUS_REFRESH} from "./ServerStatusMessage.js";
@@ -49,6 +50,7 @@ export const COMMAND_ACCESS: Readonly<Record<string, Permission>> = {
     grant: "ROLE_ACCESS_MANAGE",
     revoke: "ROLE_ACCESS_MANAGE",
     roles: "ROLE_ACCESS_MANAGE",
+    chats: "ROLE_CHAT_LIST",
 
     //Карточка — просмотр (по чату), всё остальное — правка (по человеку).
     server: "ROLE_SERVER_ADMIN_VIEW",
@@ -85,6 +87,8 @@ export const CALLBACK_ACCESS: readonly CallbackAccessRule[] = [
     //Админская карточка: открыть и проверить — просмотр, вкл/выкл и удаление — правка.
     {match: ADMIN_VIEW_PATTERN, permission: "ROLE_SERVER_ADMIN_VIEW"},
     {match: ADMIN_MANAGE_PATTERN, permission: "ROLE_SERVER_MANAGE"},
+    //Листание /chats.
+    {match: CHAT_LIST_PATTERN, permission: "ROLE_CHAT_LIST"},
 ];
 
 //Чьи права проверять. Правило «видеть — по чату, менять — по человеку».

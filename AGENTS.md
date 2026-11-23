@@ -97,7 +97,11 @@ teamSpeakMonitoring/         сам сервис
                              опроса, безусловно) и serverOnline/Offline (переходы статуса).
                              checkOnce(config) — разовый опрос мимо расписания и probe: тот же
                              pollServerSources, результат возвращается вызывающему, событий нет
-      ServerProbe.ts         состояние одного сервера; ServerProbeSnapshot, ServerStatus
+      ServerProbe.ts         состояние одного сервера; ServerProbeSnapshot, ServerStatus; RestoredProbeState —
+                             с какого статуса начать после рестарта (итерация 22)
+      ServerStateMemory.ts   память статусов между рестартами: что сохранять (без unknown), что из
+                             сохранённого восстанавливать (только свежее MONITOR_STATE_RESTORE_MAX_AGE_MS),
+                             оценка простоя; здесь же контракт ServerStateStore
       Scheduler.ts           generic Scheduler<TTask>: per-task setTimeout, sync без сброса таймеров;
                              wake(id) — запустить ждущую задачу сейчас (новый план опроса пришёл снаружи)
       PollPolicy.ts          чистая функция: состояние сервера → план опроса (интервал, порог offline,
@@ -142,7 +146,12 @@ teamSpeakMonitoring/         сам сервис
                              Часов внутри нет — когда тикать, решает Scheduler в composition root
       ChangesOnlyNotifier.ts обёртка «только при расхождении»: помнит последнюю УСПЕШНУЮ доставку
                              по каждому предмету и молчит, если состояние то же. Упавшая доставка
-                             не запоминается и повторяется следующим тиком
+                             не запоминается и повторяется следующим тиком. Необязательная
+                             DeliveryMemory переносит память через рестарт (итерация 22)
+      StatusDeliveryJournal.ts  память «что какому чату сказано про сервер» из базы: читается при
+                             старте, раздаётся по чатам (memoryFor), запись отказом не бросает
+      StateStoreNotifier.ts  канал «хранилище»: статусы серверов в базу на переходе и на каждом
+                             тике StateSync (подтверждение свежести)
       TelegramStatusNotifier.ts  переходы статуса в Telegram; текст — из таблицы
                              Record<событие, текст>; здесь же интерфейс MessageSender
       PerSubscriberNotifier.ts  обёртка «каждому подписчику своё»: одно событие про сервер →
@@ -229,6 +238,12 @@ teamSpeakMonitoring/         сам сервис
       AccessCommands.ts      /start (роль по умолчанию однократно + список команд по правам), /help,
                              /whoami, /grant, /revoke, /roles (обзор; /roles <chat_id> или ответом —
                              роли одного чата с тем, кто и когда выдал). Персональные меню на старте
+      ChatListCommands.ts    /chats — кто писал боту: личка/группа, с какого дня, роли (root — из
+                             конфигурации), подписки; листание кнопками ch:<страница>. Право
+                             ROLE_CHAT_LIST (только root, итерация 21). Здесь же ChatDirectory, RootChecker
+      ChatListMessage.ts     текст и кнопки /chats чистой функцией; имена экранируются и обрезаются
+      StartupNoticeMessage.ts  сообщение root о запуске: версия (APP_VERSION), простой, восстановлены
+                             ли статусы, сколько памяти уведомлений (итерация 22)
       TeamSpeakCommands.ts   всё, что бот умеет про TeamSpeak: пока только /who; здесь же
                              OnlineNicknamesSource. Раньше назывался StatusCommands и держал
                              ещё /time (уехал синонимом /status — показывал чужие подписки)
@@ -281,6 +296,11 @@ teamSpeakMonitoring/         сам сервис
                              findStoredById — один включённый сервер с источниками, без условия
                              на подписку: для разовой проверки по кнопке
       FeedbackRepository.ts  сообщения обратной связи и их доставки (миграция 011)
+      ServerStateRepository.ts   server_status_state (миграция 012): перезапись только более новым
+                             подтверждением, удалённый сервер не роняет запись
+      StatusDeliveryRepository.ts  telegram_status_deliveries (миграция 012): ячейка на (чат, сервер)
+      ChatDirectoryRepository.ts  сводка по telegram_chats для /chats: роли GROUP_CONCAT, подписки
+                             подзапросом (JOIN размножил бы роли), порядок created_at DESC, chat_id DESC
       RoleRepository.ts      назначения ролей (telegram_chat_roles) и пометка однократной выдачи
                              роли по умолчанию; что роль разрешает, не знает
       SubscriptionRepository.ts  чтение и запись подписок: чаты, подписка/отписка, типы уведомлений
@@ -409,10 +429,14 @@ teamSpeakMonitoring/         сам сервис
     1440 сообщений «is online» в сутки.
   - **Обёртка Telegram — один экземпляр на оба события.** Двумя разными память разъезжается:
     обёртка «online» продолжала бы считать, что online уже доставлен, хотя между ними был offline.
-  - Первый тик уходит сразу на старте, поэтому сразу после рестарта в описании канала на один
-    интервал опроса появятся статусы `unknown`. Память `ChangesOnlyNotifier` живёт в процессе,
-    поэтому после рестарта статусы отправятся заново — то же самое делает переход
-    `unknown → online` на первом опросе (см. долг, п. 14).
+  - **Рестарт незаметен подписчикам** (итерация 22). Статусы серверов с моментом начала пишутся
+    в базу (`StateStoreNotifier`: на переходе и на каждом тике) и при старте восстанавливаются, если
+    подтверждены не раньше `MONITOR_STATE_RESTORE_MAX_AGE_MS`; probe начинает с них, а не с `unknown`,
+    и `/status` показывает настоящее «онлайн уже N». Память `ChangesOnlyNotifier` у Telegram тоже
+    в базе (`StatusDeliveryJournal`): уже сказанное чату не повторяется, а упавший за время простоя
+    сервер даёт «offline». Восстановление — до первой синхронизации списка и только для неё.
+    Root получает сообщение о запуске (`TELEGRAM_STARTUP_NOTICE`). Табло TeamSpeak памяти не получает
+    намеренно: его после рестарта и надо перезаписать.
 - **Один query-коннект на процесс.** `TeamSpeakConnection` держит одно SSH-соединение; его делят `TeamSpeakChannelNotifier`
   (через `TeamSpeakClient`) и Telegram-команда `/who`. Закрывает его `main` при shutdown.
   Каждая операция идёт с потолком `TS_QUERY_TIMEOUT_MS` (итерация 12b): соединение, на котором
@@ -533,7 +557,10 @@ teamSpeakMonitoring/         сам сервис
 | `BOHEMIA_LOBBY_URL` | `…/lobby/rooms/search` | эндпоинт каталога Bohemia |
 | `BOHEMIA_USER_AGENT` / `BOHEMIA_CLIENT_VERSION` | `Arma Reforger/1.8.0.10 (Client; Windows)` / `1.8.0` | протокольные константы игрового клиента, **меняются с патчами игры** |
 | `BOHEMIA_PLATFORM_ID` / `BOHEMIA_GAME_CLIENT_TYPE` | `ReforgerSteam` / `PLATFORM_PC` | поля тела запроса rooms/search |
-| `MONITOR_STATE_SYNC_INTERVAL_MS` | `60000` | период повторной публикации текущего состояния |
+| `MONITOR_STATE_SYNC_INTERVAL_MS` | `60000` | период повторной публикации текущего состояния; он же — как часто подтверждается сохранённый статус |
+| `MONITOR_STATE_RESTORE_MAX_AGE_MS` | `600000` | сохранённые статусы старше этого при старте не восстанавливаются (итерация 22) |
+| `TELEGRAM_STARTUP_NOTICE` | `true` | сообщение root о каждом запуске: версия, простой, восстановлены ли статусы. В деве удобно выключить в `.env.dev.local` |
+| `APP_VERSION` | `dev` | версия сборки; в образ попадает SHA коммита (`ARG` в Dockerfile, `build-args` в workflow). Руками не задаётся |
 
 Секреты кладутся **только** в `*.local`-файлы (gitignored). Коммитятся `.env`, `.env.dev`, `.env.test`
 как шаблоны с заглушками.
@@ -629,6 +656,14 @@ CREATE TABLE IF NOT EXISTS server_query_sources
 > никогда. Обнаружено при первом запуске тестов против свежего дев-окружения; лишняя строка убрана.
 > Настоящая починка — один исполняемый источник схемы: мигратор появился в 6b, дубль DDL в тестах
 > уходит в 6c.
+
+### Память между рестартами (миграция 012)
+
+`server_status_state` — последний известный статус сервера (`online`/`offline`), `status_since` и
+`confirmed_at` (когда живой процесс последний раз подтвердил), `timestamp(3)`. Перезаписывается только
+более новым подтверждением: тик и переход пишут независимо. `telegram_status_deliveries` — какой статус
+последним доставлен в чат (`serverOnline`/`serverOffline`), ячейка на пару (`chat_id`, `server_id`).
+Обе таблицы чистятся каскадом от сервера и чата.
 
 ### Обратная связь (миграция 011)
 
@@ -1003,8 +1038,9 @@ npm run test:repo  # только src/persistence/*.test.ts
     в коде стоял комментарий «зачем собирать сообщение чтоб потом из него забирать одно поле».
     У probe осталось ровно два события — переходы статуса. Изменение числа игроков наружу отдаёт
     `ServerMonitor` через `stateUpdated`.
-14. `forceSync` пересоздаёт probes, теряя `status`/`statusSince`/`failedChecks` — после него все серверы
-    заново проходят `unknown → online`.
+14. 🟡 **Рестарт процесса закрыт итерацией 22** (статусы и память доставок в базе). Остаётся
+    `forceSync`: он пересоздаёт probes, теряя `status`/`statusSince`/`failedChecks` — после него все серверы
+    заново проходят `unknown → online` (сообщений это не даёт: память доставок не сбрасывается).
 
     **Симптом в Telegram, похоже, исчез сам после 8b — но тестом это не закреплено.** Память
     `ChangesOnlyNotifier` живёт в нотифаере, а не в probe, поэтому `forceSync` её не сбрасывает:

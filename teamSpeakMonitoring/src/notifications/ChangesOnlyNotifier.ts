@@ -1,5 +1,16 @@
 import type {Notifier, NotificationEventOf, NotificationEventType} from "./events.js";
 
+//Память доставок, переживающая рестарт (итерация 22). Без неё обёртка начинает с пустой памяти,
+//и после обновления бота каждый подписчик снова получал «is online» по каждому серверу.
+export interface DeliveryMemory {
+    //Что было доставлено до рестарта: с этого обёртка начинает вместо пустой памяти.
+    readonly restored: ReadonlyMap<string, string>;
+
+    //Успешная доставка. Обязана не бросать: сообщение уже ушло, и отказ записи не должен
+    //откатить память — иначе следующий тик отправил бы его второй раз.
+    remember(subject: string, dedupKey: string): Promise<void>;
+}
+
 //Обёртка над нотифаером: доставляет событие только если по этому предмету ещё не доставлено
 //такое же состояние. Помнит **последнюю успешную** доставку — упавшая не запоминается и повторится.
 //
@@ -30,16 +41,19 @@ import type {Notifier, NotificationEventOf, NotificationEventType} from "./event
 //    online  → ячейка "1:serverOnline" ЕСТЬ → молчим, и так навсегда
 //Закреплено тестом «оба события обслуживает один экземпляр обёртки, иначе память разъезжается».
 //
-//Память живёт в процессе: после рестарта первый тик отправит статусы заново. Это не регресс —
-//сейчас то же самое делает переход unknown → online на первом опросе (долг, п. 14).
+//Без DeliveryMemory память живёт в процессе: после рестарта первый же статус уйдёт заново.
+//Так и задумано для табло TeamSpeak — его после рестарта и надо перезаписать. Telegram получает
+//память из базы (StatusDeliveryJournal): там повтор после рестарта — шум.
 export class ChangesOnlyNotifier<TType extends NotificationEventType> implements Notifier<TType> {
-    private readonly delivered = new Map<string, string>();
+    private readonly delivered: Map<string, string>;
 
     constructor(
         private readonly inner: Notifier<TType>,
         private readonly subjectOf: (event: NotificationEventOf<TType>) => string,
         private readonly dedupKeyOf: (event: NotificationEventOf<TType>) => string,
+        private readonly memory?: DeliveryMemory,
     ) {
+        this.delivered = new Map(memory?.restored ?? []);
     }
 
     public async notify(event: NotificationEventOf<TType>): Promise<void> {
@@ -65,6 +79,12 @@ export class ChangesOnlyNotifier<TType extends NotificationEventType> implements
             }
 
             throw error;
+        }
+
+        //Пока шла отправка, по этому предмету могли доставить другое состояние — тогда запоздавшая
+        //запись затёрла бы в хранилище более новое.
+        if (this.delivered.get(subject) === dedupKey) {
+            await this.memory?.remember(subject, dedupKey);
         }
     }
 }

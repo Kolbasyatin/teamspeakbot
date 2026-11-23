@@ -1,4 +1,4 @@
-import {ServerProbe, type ServerProbeSnapshot, type ServerStatus} from "./ServerProbe.js";
+import {ServerProbe, type RestoredProbeState, type ServerProbeSnapshot, type ServerStatus} from "./ServerProbe.js";
 import {EventEmitter} from "node:events";
 import type {ServerMonitorConfig} from "./MonitoredServer.js";
 import type {Querier, QuerierRegistry, ServerPollResult, ServerQueryConfig} from "./ServerQuery.js";
@@ -41,6 +41,11 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     //Серверы в режиме «ожидается простой»: id → до какого момента. Монитор не знает, ПОЧЕМУ
     //простой ожидается (сейчас — конец раунда), ему это и не нужно: основание приходит снаружи.
     private readonly watchedUntil = new Map<number, number>();
+    //Статусы, сохранённые до рестарта процесса (итерация 22). Действуют только на первую
+    //синхронизацию после restoreStates: всё, что она не забрала, выбрасывается. Probe, созданный
+    //позже (подписались на новый сервер, правка конфига, forceSync), начинает с unknown —
+    //сохранённое к тому времени уже не про сейчас.
+    private readonly restoredStates = new Map<number, RestoredProbeState>();
 
     public constructor(
         private readonly options: MonitorProperties,
@@ -56,6 +61,13 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         this.secondaryThrottle = new SecondarySourceThrottle(options.secondaryPollIntervalMs);
     }
     
+    //Вызывается до первой синхронизации списка серверов, иначе восстанавливать будет некуда.
+    public restoreStates(states: ReadonlyMap<number, RestoredProbeState>): void {
+        for (const [serverId, state] of states) {
+            this.restoredStates.set(serverId, state);
+        }
+    }
+
     public start(): void {
         this.scheduler.sync(this.getScheduledTasks());
         this.scheduler.start();
@@ -143,6 +155,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         this.scheduler.sync(this.getScheduledTasks());
         this.secondaryThrottle.retain(servers);
         this.retainWatches(servers);
+        this.restoredStates.clear();
     }
 
     public syncServers(servers: ServerMonitorConfig[]): void {
@@ -186,6 +199,7 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
         this.scheduler.sync(this.getScheduledTasks());
         this.secondaryThrottle.retain(servers);
         this.retainWatches(servers);
+        this.restoredStates.clear();
     }
 
     public stop(): void {
@@ -292,7 +306,10 @@ export class ServerMonitor extends EventEmitter<ServerMonitorEvents> {
     }
 
     private createServerProbe(server: ServerMonitorConfig): ServerProbe {
-        return new ServerProbe(server, this.options.maxFailedChecks, this.logger);
+        const restored = this.restoredStates.get(server.id);
+        this.restoredStates.delete(server.id);
+
+        return new ServerProbe(server, this.options.maxFailedChecks, this.logger, restored);
     }
     
 }

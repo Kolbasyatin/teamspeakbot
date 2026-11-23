@@ -409,3 +409,28 @@ test("watchClosely по серверу, которого нет в опросе,
     assert.doesNotThrow(() => monitor.watchClosely(42));
     assert.deepEqual(monitor.getSnapshot(), []);
 });
+
+//Итерация 22: восстановленный статус достаётся probe при первой синхронизации, и только ей.
+test("восстановленный статус берёт probe своего сервера при первой синхронизации, позже — никто", () => {
+    const monitor = createMonitor({a2s: createQuerier(undefined), rest: createQuerier(undefined), bohemia: createQuerier(undefined)});
+    const since = new Date("2026-11-24T08:00:00Z");
+
+    monitor.restoreStates(new Map([[1, {status: "online", since}], [9, {status: "offline", since}]]));
+    monitor.syncServers([a2sServer(1, "Restored"), a2sServer(2, "Fresh")]);
+
+    const statuses = (): Record<number, string> => Object.fromEntries(
+        monitor.getSnapshot().map(snapshot => [snapshot.config.id, snapshot.status]),
+    );
+
+    assert.deepEqual(statuses(), {1: "online", 2: "unknown"});
+    assert.deepEqual(monitor.getSnapshot().find(snapshot => snapshot.config.id === 1)?.statusSince, since);
+
+    //Сервер 9 попал в опрос позже (на него подписались): его сохранённый статус к этому времени
+    //устарел и выброшен вместе с остальным невостребованным.
+    monitor.syncServers([a2sServer(1, "Restored"), a2sServer(2, "Fresh"), a2sServer(9, "Later")]);
+    assert.equal(statuses()[9], "unknown");
+
+    //Пересозданный probe (forceSync, правка конфига) тоже начинает с unknown.
+    monitor.forceSync([a2sServer(1, "Restored")]);
+    assert.deepEqual(statuses(), {1: "unknown"});
+});

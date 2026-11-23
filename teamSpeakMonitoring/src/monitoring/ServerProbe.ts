@@ -17,6 +17,15 @@ export interface ServerProbeSnapshot {
     statusSince: Date;
 }
 
+//С чего probe начинает после рестарта процесса (итерация 22): статус и момент, с которого он
+//держится, сохранённые до рестарта. Без него probe начинает с unknown, и первый же опрос даёт
+//переход unknown → online — «is online» всем подписчикам и «онлайн 1 минуту» в /status.
+//unknown не восстанавливается: о нём сказать нечего, с него и так начинают.
+export interface RestoredProbeState {
+    status: "online" | "offline";
+    since: Date;
+}
+
 //Карта событий: имена и типы аргументов проверяются компилятором, опечатка больше не даст
 //тихого no-op. Событий ровно два — только переходы статуса, на которые есть подписчики.
 export interface ServerProbeEvents {
@@ -25,8 +34,9 @@ export interface ServerProbeEvents {
 }
 
 export class ServerProbe extends EventEmitter<ServerProbeEvents> {
-    private status: ServerStatus = 'unknown';
+    private status: ServerStatus;
     private failedChecks: number = 0;
+    private statusSince: Date;
     //Последние успешно полученные данные. Живут дольше одного опроса намеренно: пока сервер
     //в дребезге (неудачи есть, но порога не достигли), он ещё считается online и показывать
     //надо их. Наружу отдаются только через currentInfo, то есть пока статус это подтверждает.
@@ -36,9 +46,17 @@ export class ServerProbe extends EventEmitter<ServerProbeEvents> {
         private readonly serverData: ServerMonitorConfig,
         private maxFailedChecks: number = 5,
         private logger: Logger,
-        private statusSince: Date = new Date(),
+        restored?: RestoredProbeState,
     ) {
         super();
+        this.status = restored?.status ?? 'unknown';
+        this.statusSince = restored?.since ?? new Date();
+
+        //Восстановленный offline — это сервер, уже дошедший до порога: счётчик ставится на порог,
+        //как если бы probe сам туда пришёл. Иначе снапшот показывал бы offline с нулём неудач.
+        if (restored?.status === 'offline') {
+            this.failedChecks = maxFailedChecks;
+        }
     }
 
     //Порог offline — параметром опроса, а не только конструктора: его выбирает политика опроса

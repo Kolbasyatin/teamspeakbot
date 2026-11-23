@@ -42,7 +42,8 @@
 ```
 ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
             ├── ROLE_USER_ADMIN ───┴── ROLE_SERVER_USER        (+ ROLE_ANONYMOUS у всех)
-            └── ROLE_TS_USER                                    (/who — только по выдаче)
+            ├── ROLE_TS_USER                                    (/who — только по выдаче)
+            └── ROLE_CHAT_LIST                                  (/chats — право только root)
 ```
 
 | Группа | Право | Команды | Кнопки |
@@ -60,6 +61,7 @@ ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
 | | `ROLE_PLAYER_DOSSIER` | `/playerinfo`, `/steaminfo` | `pi:` |
 | | `ROLE_PLAYER_QUEUE` | — (команды нет) | `pq:` — «Проверить очередь» под уведомлением «встал в очередь» |
 | **ROLE_TS_USER** (2026-11-24) — только по выдаче | `ROLE_TS_VIEW` | `/who` | — |
+| **ROLE_ROOT** напрямую (2026-11-24) | `ROLE_CHAT_LIST` — по чату | `/chats` — все чаты, писавшие боту: личка или группа, с какого дня, роли, подписки | `ch:<страница>` (листание) |
 | **ROLE_USER_ADMIN** | `ROLE_ACCESS_MANAGE` | `/grant`, `/revoke`, `/roles` | — |
 | **ROLE_SERVER_ADMIN** (итерация 14) | `ROLE_SERVER_ADMIN_VIEW` — по чату | `/server <id>`; `/serverlist` показывает все серверы с `#id` | `a:o`, `a:k` (открыть, проверить) |
 | | `ROLE_SERVER_MANAGE` — по человеку | `/server_add`, `/server_edit`, `/server_delete`, `/source_add`, `/source_edit`, `/source_delete` | `a:e`, `a:d`, `a:x`, `a:y`, `a:se`, `a:sd`, `a:sx` (вкл/выкл, удаление) |
@@ -69,6 +71,11 @@ ROLE_ROOT ──┬── ROLE_PLAYER_USER ──┐
 (решение zalex): кто сейчас в TeamSpeak — для своих. Выдаётся `/grant <chat_id> ts_user`: группе —
 и `/who` работает у всех её участников в этой группе, — или человеку в личку. В `ROLE_USER_ADMIN`
 группа не входит, как и `ROLE_PLAYER_USER`: раздаёт её root или админ, которому её выдали.
+
+`ROLE_CHAT_LIST` — отдельное право прямо у root, ни в одну группу не входит (решение zalex
+2026-11-24): список содержит имена и id всех, кто писал боту. Другим — поштучно, `/grant <id> chat_list`.
+Проверяется по чату, как любой просмотр: root видит его в своей личке с ботом, а в группе — только
+если право выдано самой группе, и тогда его видят все её участники.
 
 `ROLE_SUPER_USER` из первой редакции переименован в `ROLE_PLAYER_USER`: «супер» читалось как
 «почти root». `ROLE_SERVER_ADMIN` заведён в итерации 14 вместе с командами управления серверами;

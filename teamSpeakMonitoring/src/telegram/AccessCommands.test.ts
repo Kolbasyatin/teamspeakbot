@@ -69,7 +69,8 @@ test("справочник ролей показывает команды каж
     const catalog = renderRoleCatalog().join("\n");
 
     assert.match(catalog, /ROLE_PLAYER_DOSSIER: \/playerinfo \/steaminfo/);
-    assert.match(catalog, /ROLE_ROOT: ROLE_PLAYER_USER, ROLE_TS_USER, ROLE_USER_ADMIN/);
+    assert.match(catalog, /ROLE_ROOT: ROLE_PLAYER_USER, ROLE_TS_USER, ROLE_CHAT_LIST, ROLE_USER_ADMIN/);
+    assert.match(catalog, /ROLE_CHAT_LIST: \/chats/);
     assert.match(catalog, /ROLE_TS_USER: ROLE_TS_VIEW/);
     assert.match(catalog, /ROLE_TS_VIEW: \/who/);
     assert.doesNotMatch(catalog, /ROLE_ANONYMOUS:/);

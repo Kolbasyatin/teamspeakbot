@@ -31,6 +31,9 @@ export const PERMISSIONS = [
     "ROLE_SERVER_ADMIN_VIEW",
     //Заводить, править и удалять серверы и источники. Проверяется по ЧЕЛОВЕКУ, как раздача прав.
     "ROLE_SERVER_MANAGE",
+    //Список всех чатов, писавших боту (/chats): личные имена и роли. Только у root, остальным —
+    //поштучной выдачей. По чату, как любой просмотр: выданное группе увидят все её участники.
+    "ROLE_CHAT_LIST",
 ] as const;
 
 export type Permission = typeof PERMISSIONS[number];
@@ -88,6 +91,7 @@ export const ROLE_HIERARCHY: Readonly<Record<RoleGroup, readonly Role[]>> = {
     ROLE_ROOT: [
         "ROLE_PLAYER_USER",
         "ROLE_TS_USER",
+        "ROLE_CHAT_LIST",
         "ROLE_USER_ADMIN",
         "ROLE_SERVER_ADMIN",
     ],

@@ -56,6 +56,16 @@ test("/who не по умолчанию: кто сейчас в TeamSpeak, ви�
     assert.ok(permissionsOfRole("ROLE_TS_USER").has("ROLE_TS_VIEW"));
 });
 
+test("список чатов (/chats) — только у root, ни у одной другой группы", () => {
+    assert.ok(permissionsOfRole("ROLE_ROOT").has("ROLE_CHAT_LIST"));
+
+    for (const group of ROLE_GROUPS) {
+        if (group !== "ROLE_ROOT") {
+            assert.ok(!permissionsOfRole(group).has("ROLE_CHAT_LIST"), `${group} не должна видеть список чатов`);
+        }
+    }
+});
+
 test("группу TeamSpeak выдаёт root и админ, у которого она есть; админ без неё — нет", () => {
     const root = permissionsOfRoles(["ROLE_ROOT"]);
     const admin = permissionsOfRoles(["ROLE_USER_ADMIN"]);

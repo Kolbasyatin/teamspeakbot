@@ -93,6 +93,7 @@ export interface SyncServerPort {
 }
 
 export interface TGProperties {
+    startupNotice: boolean;
     token: string;
     channelId: string;
     updateTimeoutMs: number;
@@ -378,6 +379,7 @@ const roundFinishConfig = convict<RoundFinishProperties>({
 //в семье MONITOR_*, потому что речь о состоянии, которое собирает монитор.
 export interface StateSyncProperties {
     intervalMs: number;
+    restoreMaxAgeMs: number;
 }
 
 const stateSyncConfig = convict<StateSyncProperties>({
@@ -386,6 +388,30 @@ const stateSyncConfig = convict<StateSyncProperties>({
         format: "nat",
         default: 60_000,
         env: "MONITOR_STATE_SYNC_INTERVAL_MS",
+    },
+    //Статусы, сохранённые раньше этого срока, при старте не восстанавливаются (итерация 22):
+    //пока бота не было, сервер мог упасть и подняться, и «онлайн уже 3 дня» стало бы ложью.
+    //Обновление занимает секунды, десять минут — с запасом на медленный pull образа.
+    restoreMaxAgeMs: {
+        doc: "Saved server statuses older than this are not restored on startup",
+        format: "nat",
+        default: 600_000,
+        env: "MONITOR_STATE_RESTORE_MAX_AGE_MS",
+    },
+});
+
+//Версия сборки: SHA коммита, из которого собран образ (ARG в Dockerfile, build-args в workflow).
+//Вне образа — dev.
+export interface BuildProperties {
+    version: string;
+}
+
+const buildConfig = convict<BuildProperties>({
+    version: {
+        doc: "Build version (git SHA of the image)",
+        format: String,
+        default: "dev",
+        env: "APP_VERSION",
     },
 });
 
@@ -414,6 +440,14 @@ const syncServerConfig = convict<SyncServerPort>({
 });
 
 const tgConfig = convict<TGProperties>({
+    //Сообщение root о запуске: версия, сколько бот не работал, восстановлены ли статусы (итерация 22).
+    //Только root: подписчикам рестарт неинтересен, а после итерации 22 и незаметен.
+    startupNotice: {
+        doc: "Send a startup notice to root chats",
+        format: Boolean,
+        default: true,
+        env: "TELEGRAM_STARTUP_NOTICE",
+    },
     token: {
         doc: "Telegram Bot Token",
         format: String,
@@ -529,6 +563,7 @@ teamSpeakChannelsConfig.validate({allowed: "strict"});
 tgConfig.validate({allowed: "strict"});
 monitorConfig.validate({allowed: "strict"});
 stateSyncConfig.validate({allowed: "strict"});
+buildConfig.validate({allowed: "strict"});
 teamSpeakQueryConfig.validate({allowed: "strict"});
 bohemiaConfig.validate({allowed: "strict"});
 playerObserverConfig.validate({allowed: "strict"});
@@ -540,6 +575,7 @@ export const teamSpeakChannelNames = teamSpeakChannelsConfig.getProperties();
 export const tgProperties = tgConfig.getProperties();
 export const monitorProperties = monitorConfig.getProperties();
 export const stateSyncProperties = stateSyncConfig.getProperties();
+export const buildProperties = buildConfig.getProperties();
 export const teamSpeakQueryProperties = teamSpeakQueryConfig.getProperties();
 export const roundFinishProperties = roundFinishConfig.getProperties();
 export const bohemiaProperties = bohemiaConfig.getProperties();

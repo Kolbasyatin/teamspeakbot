@@ -234,3 +234,40 @@ test("повышенный обратно порог не поднимает л�
 
     assert.equal(probe.getSnapshot().status, "offline");
 });
+
+//Итерация 22: после рестарта процесса probe начинает с сохранённого статуса, а не с unknown.
+
+const SINCE = new Date("2026-11-24T08:00:00Z");
+
+test("восстановленный online: снапшот со старым «с какого момента», и первый же успех событий не даёт", () => {
+    const probe = new ServerProbe(serverConfig, MAX_FAILED_CHECKS, silentLogger, {status: "online", since: SINCE});
+    const events = recordEvents(probe);
+
+    probe.handleResult(pollSuccess(10));
+
+    assert.deepEqual(events, [], "статус тот же — подписчикам сказать нечего");
+    assert.equal(probe.getSnapshot().status, "online");
+    assert.deepEqual(probe.getSnapshot().statusSince, SINCE, "«онлайн уже N» считается от сохранённого момента");
+});
+
+test("восстановленный online, а сервер лёг: переход в offline по обычному порогу", () => {
+    const probe = new ServerProbe(serverConfig, MAX_FAILED_CHECKS, silentLogger, {status: "online", since: SINCE});
+    const events = recordEvents(probe);
+
+    failTimes(probe, MAX_FAILED_CHECKS);
+
+    assert.deepEqual(events, ["offline"]);
+    assert.notDeepEqual(probe.getSnapshot().statusSince, SINCE);
+});
+
+test("восстановленный offline стоит на пороге неудач, а подъём даёт online", () => {
+    const probe = new ServerProbe(serverConfig, MAX_FAILED_CHECKS, silentLogger, {status: "offline", since: SINCE});
+    const events = recordEvents(probe);
+
+    assert.equal(probe.getSnapshot().failedChecks, MAX_FAILED_CHECKS);
+    assert.equal(probe.getSnapshot().currentInfo, undefined);
+
+    probe.handleResult(pollSuccess(3));
+
+    assert.deepEqual(events, ["online"]);
+});

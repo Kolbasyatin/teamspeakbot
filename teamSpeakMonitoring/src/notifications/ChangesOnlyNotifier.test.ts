@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {ChangesOnlyNotifier} from "./ChangesOnlyNotifier.js";
+import {ChangesOnlyNotifier, type DeliveryMemory} from "./ChangesOnlyNotifier.js";
 import {StateSync, type CurrentStateSource} from "./StateSync.js";
 import {NotificationDispatcher} from "./NotificationDispatcher.js";
 import {subscribe, type NotificationEventOf, type Notifier} from "./events.js";
@@ -199,4 +199,44 @@ test("оба события обслуживает один экземпляр �
     await dispatcher.notify(statusEvent(1, "serverOnline"));
 
     assert.deepEqual(inner.sent, ["1:serverOnline", "1:serverOffline", "1:serverOnline"]);
+});
+
+//Итерация 22: память доставок переживает рестарт.
+
+function memoryOf(restored: Record<string, string>): DeliveryMemory & {remembered: string[]} {
+    const remembered: string[] = [];
+
+    return {
+        remembered,
+        restored: new Map(Object.entries(restored)),
+        remember: async (subject, dedupKey) => {
+            remembered.push(`${subject}:${dedupKey}`);
+        },
+    };
+}
+
+function wrapWithMemory(inner: Notifier<StatusEvent>, memory: DeliveryMemory): ChangesOnlyNotifier<StatusEvent> {
+    return new ChangesOnlyNotifier(inner, event => String(event.snapshot.config.id), event => event.type, memory);
+}
+
+test("после рестарта уже сказанное не повторяется, а изменившееся за время простоя — доставляется", async () => {
+    const inner = createRecording();
+    const notifier = wrapWithMemory(inner, memoryOf({1: "serverOnline", 2: "serverOnline"}));
+
+    await notifier.notify(statusEvent(1, "serverOnline"));
+    await notifier.notify(statusEvent(2, "serverOffline"));
+
+    assert.deepEqual(inner.sent, ["2:serverOffline"], "сервер 1 уже был «online» до рестарта, сервер 2 упал, пока бота не было");
+});
+
+test("успешная доставка запоминается в хранилище, упавшая — нет", async () => {
+    const inner = createRecording();
+    const memory = memoryOf({});
+    const notifier = wrapWithMemory(inner, memory);
+
+    inner.failNext(new Error("Telegram недоступен"));
+    await assert.rejects(notifier.notify(statusEvent(1, "serverOnline")));
+    await notifier.notify(statusEvent(1, "serverOnline"));
+
+    assert.deepEqual(memory.remembered, ["1:serverOnline"]);
 });

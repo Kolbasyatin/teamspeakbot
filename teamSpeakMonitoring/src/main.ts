@@ -27,6 +27,7 @@ import {
     tgProperties,
     monitorProperties,
     stateSyncProperties,
+    buildProperties,
     roundFinishProperties,
     teamSpeakChannelNames,
     teamSpeakQueryProperties,
@@ -52,6 +53,8 @@ import {TelegramBot} from "./telegram/TelegramBot.js";
 import {TeamSpeakCommands} from "./telegram/TeamSpeakCommands.js";
 import {SubscriptionCommands} from "./telegram/SubscriptionCommands.js";
 import {AccessCommands, type ChatMenus} from "./telegram/AccessCommands.js";
+import {ChatListCommands} from "./telegram/ChatListCommands.js";
+import {ChatDirectoryRepository} from "./persistence/ChatDirectoryRepository.js";
 import {createAccessGuard} from "./telegram/AccessGuard.js";
 import {buildPlayerFeature, type ChatSender} from "./players/buildPlayerFeature.js";
 import {TelegramStatusNotifier, type ServerStatusEventType} from "./notifications/TelegramStatusNotifier.js";
@@ -62,6 +65,12 @@ import {retry} from "./retry.js";
 import {buildMonitorConfigs, type BuildNotice} from "./monitoring/buildMonitorConfigs.js";
 import type {ServerMonitorConfig} from "./monitoring/MonitoredServer.js";
 import type {ServerPollResult} from "./monitoring/ServerQuery.js";
+import {lastConfirmedAt, restorableStates} from "./monitoring/ServerStateMemory.js";
+import {ServerStateRepository} from "./persistence/ServerStateRepository.js";
+import {StatusDeliveryRepository} from "./persistence/StatusDeliveryRepository.js";
+import {StatusDeliveryJournal} from "./notifications/StatusDeliveryJournal.js";
+import {StateStoreNotifier} from "./notifications/StateStoreNotifier.js";
+import {renderStartupNotice, type StartupReport} from "./telegram/StartupNoticeMessage.js";
 
 //Предупреждения сборки конфигов — единственное место, где они превращаются в текст.
 //switch, а не if: новый вариант BuildNotice обязан получить свою ветку, иначе присваивание
@@ -133,6 +142,13 @@ async function main(): Promise<any> {
     const serverRepository = new ServerRepository(pool);
     const subscriptionRepository = new SubscriptionRepository(pool);
     const playerSubscriptionRepository = new PlayerSubscriptionRepository(pool);
+    //Память между рестартами (итерация 22): статусы серверов и что какому чату о них сказано.
+    //Читаются при старте, до первого опроса (restoreMemory ниже).
+    const serverStateRepository = new ServerStateRepository(pool);
+    const statusDeliveries = new StatusDeliveryJournal(
+        new StatusDeliveryRepository(pool),
+        log.child({component: "telegram"}),
+    );
     //Права на команды бота (rbac.md). Root — из конфига, назначения — из базы, состав ролей — в коде.
     //Потерянное право забирает с собой то, чем чат пользовался по нему: подписки остались бы
     //и продолжали слать уведомления тому, кто управлять ими уже не может.
@@ -266,6 +282,7 @@ async function main(): Promise<any> {
     let telegramBot: TelegramBot | undefined = telegramApi
         ? new TelegramBot(telegramApi, [
             accessCommands,
+            new ChatListCommands(new ChatDirectoryRepository(pool), access, log.child({component: "access"})),
             feedbackCommands,
             serverAdminCommands,
             new TeamSpeakCommands(teamSpeakClient),
@@ -290,6 +307,14 @@ async function main(): Promise<any> {
     //Единственное место, где решается, что куда отправляется. Выключенный канал не создаётся
     //вовсе, поэтому нотифаерам не нужен ни флаг активности, ни знание о конфигурации.
     const subscriptions: NotificationSubscription[] = [];
+
+    //Статусы серверов — в базу, чтобы рестарт не начинал их с unknown (итерация 22). Не зависит
+    //от флагов нотифаеров: это память самого бота, а не канал для людей. Один экземпляр на все три
+    //события — состояния у него нет.
+    const stateStoreNotifier = new StateStoreNotifier(serverStateRepository);
+    subscriptions.push(subscribe("serverOnline", "stateStore", stateStoreNotifier));
+    subscriptions.push(subscribe("serverOffline", "stateStore", stateStoreNotifier));
+    subscriptions.push(subscribe("serverStateRepublished", "stateStore", stateStoreNotifier));
 
     if (notifierConfig.log) {
         //Своя дедупликация, не общая с TeamSpeak: журналу интересно изменение ДАННЫХ, поэтому
@@ -370,8 +395,11 @@ async function main(): Promise<any> {
                 //Привязка адресата — здесь, в composition root: нотифаеру по-прежнему нужна одна
                 //операция «отправить текст», и про chatId он не знает.
                 new TelegramStatusNotifier({send: text => telegramSender.send(chatId, text)}),
+                //Предмет — id сервера строкой: так его ждёт StatusDeliveryJournal.
                 event => String(event.snapshot.config.id),
                 event => event.type,
+                //Память доставок из базы: после рестарта уже сказанное не повторяется.
+                statusDeliveries.memoryFor(chatId),
             ),
         );
 
@@ -555,7 +583,38 @@ async function main(): Promise<any> {
         })
     });
 
-    void await retry(syncMonitorServersFromRepository, {
+    //Память — до первой синхронизации: восстановленные статусы забирают probe при создании,
+    //а память доставок раздаётся чатам при первом событии. В том же повторе, что и чтение серверов:
+    //база могла ещё не подняться. Повтор восстанавливает заново — это безвредно.
+    async function restoreMemory(): Promise<StartupReport> {
+        const now = new Date();
+        const saved = await serverStateRepository.loadStates();
+        const restored = restorableStates(saved, now, stateSyncProperties.restoreMaxAgeMs);
+        monitor.restoreStates(restored);
+        const deliveries = await statusDeliveries.load();
+
+        log.info(
+            {savedStates: saved.length, restoredStates: restored.size, deliveries},
+            "Память статусов и уведомлений восстановлена",
+        );
+
+        return {
+            version: buildProperties.version,
+            now,
+            lastConfirmedAt: lastConfirmedAt(saved),
+            savedStates: saved.length,
+            restoredStates: restored.size,
+            restoreMaxAgeMs: stateSyncProperties.restoreMaxAgeMs,
+            deliveries,
+        };
+    }
+
+    let startupReport: StartupReport | undefined;
+
+    void await retry(async () => {
+        startupReport = await restoreMemory();
+        await syncMonitorServersFromRepository();
+    }, {
         ...startupDbRetry,
         onRetry: (error, attempt, nextDelayMs) => {
             log.warn(
@@ -574,6 +633,18 @@ async function main(): Promise<any> {
     //догонится само.
     playerScheduler.start();
     telegramBot?.start();
+    //Root узнаёт о рестарте: версия, сколько бот не работал, восстановились ли статусы. Подписчикам
+    //не пишем — для них рестарт теперь незаметен. sendMessage от long polling не зависит.
+    if (telegramBot && tgProperties.startupNotice && startupReport) {
+        const notice = renderStartupNotice(startupReport);
+        const sender = telegramBot.sender;
+
+        for (const chatId of tgProperties.rootChatIds) {
+            void sender.send(chatId, notice).catch(error => {
+                log.warn({error, chatId}, "Не удалось отправить сообщение о запуске");
+            });
+        }
+    }
     //Персональные меню — после запуска: это сетевые вызовы, и от них ничего не зависит.
     if (telegramBot) {
         void accessCommands.publishMenus().catch(error => {

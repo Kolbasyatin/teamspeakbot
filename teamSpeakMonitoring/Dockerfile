@@ -25,6 +25,11 @@ COPY --from=build /app/dist ./dist
 #относительно себя (new URL("./migrations/", import.meta.url)).
 COPY --from=build /app/src/migrations ./dist/migrations
 
+#Версия сборки — SHA коммита (build-args в docker-build.yml); бот пишет её root при запуске.
+#В самом конце: ARG меняется на каждом коммите, и всё, что ниже, теряет кэш слоёв.
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
+
 USER node
 
 #Мигратор запускается отдельной командой: node dist/migrate.js (см. .docker/README.md).
